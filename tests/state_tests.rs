@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use jsonsheet::state::data_model::{self, Row, TableData};
 
@@ -46,9 +46,7 @@ fn test_derive_columns_empty() {
 
 #[test]
 fn test_derive_columns_single_row() {
-    let data: TableData = vec![BTreeMap::from([
-        ("x".to_string(), Value::Number(1.into())),
-    ])];
+    let data: TableData = vec![BTreeMap::from([("x".to_string(), Value::Number(1.into()))])];
 
     let cols = data_model::derive_columns(&data);
     assert_eq!(cols, vec!["x"]);

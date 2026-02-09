@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub type Row = BTreeMap<String, Value>;
 pub type TableData = Vec<Row>;

@@ -131,11 +131,7 @@ fn test_load_json_with_null_values() {
 fn test_load_json_with_mixed_keys() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mixed.json");
-    std::fs::write(
-        &path,
-        r#"[{"a":1,"b":2},{"b":3,"c":4}]"#,
-    )
-    .unwrap();
+    std::fs::write(&path, r#"[{"a":1,"b":2},{"b":3,"c":4}]"#).unwrap();
 
     let rows = json_io::load_json(&path).unwrap();
     assert_eq!(rows.len(), 2);
