@@ -1,0 +1,12 @@
+[application]
+name = "jsonsheet"
+default_platform = "desktop"
+
+[application.tools.dx]
+
+[web.app]
+
+[web.resource]
+style = []
+
+[web.resource.dev]
