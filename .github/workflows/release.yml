@@ -24,7 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      tag_ref: ${{ steps.meta.outputs.tag_ref }}
+      tag_sha: ${{ steps.meta.outputs.tag_sha }}
     steps:
+      - name: Checkout repository with tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Resolve tag
         id: meta
         shell: bash
@@ -40,7 +47,20 @@ jobs:
             exit 1
           fi
 
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            git fetch --tags origin
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag '${TAG}' was not found in the repository." >&2
+            exit 1
+          fi
+
+          TAG_SHA="$(git rev-list -n 1 "refs/tags/${TAG}")"
+
           echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "tag_ref=refs/tags/${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "tag_sha=${TAG_SHA}" >> "${GITHUB_OUTPUT}"
 
   build:
     name: Build & Package (${{ matrix.os }})
@@ -59,6 +79,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.tag_ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -134,7 +156,7 @@ jobs:
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
           name: JsonSheet ${{ needs.metadata.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ needs.metadata.outputs.tag_sha }}
           generate_release_notes: true
           files: dist/*
           fail_on_unmatched_files: true
