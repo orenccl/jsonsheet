@@ -51,6 +51,17 @@ cargo clippy     # Lint check
 cargo fmt        # Format code
 ```
 
+## Release Automation
+
+GitHub Actions will build and package binaries for Windows, Linux, and macOS, then publish a GitHub Release when a version tag is pushed.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+You can also run the `Release` workflow manually from Actions and provide a tag.
+
 ## Project Structure
 
 ```
