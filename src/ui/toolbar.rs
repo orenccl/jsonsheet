@@ -1,8 +1,7 @@
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
-use crate::io::json_io;
-use crate::state::data_model;
+use crate::io::{jsheet_io, json_io};
 use crate::state::i18n::{self, Language};
 use crate::state::table_state::TableState;
 
@@ -16,14 +15,16 @@ pub fn Toolbar(
     selected_column: Signal<Option<String>>,
 ) -> Element {
     let mut new_column = use_signal(String::new);
+
     let snapshot = data.read().clone();
     let current_language = *language.read();
-    let columns = data_model::derive_columns(snapshot.data());
+    let columns = snapshot.display_columns();
     let can_undo = snapshot.can_undo();
     let can_redo = snapshot.can_redo();
     let filter_column_value = snapshot.filter_column().unwrap_or("").to_string();
     let filter_query_value = snapshot.filter_query().to_string();
     let search_query_value = snapshot.search_query().to_string();
+
     let language_label = i18n::tr(current_language, "toolbar.language_label");
     let open_label = i18n::tr(current_language, "toolbar.open");
     let save_label = i18n::tr(current_language, "toolbar.save");
@@ -38,6 +39,7 @@ pub fn Toolbar(
     let new_column_placeholder = i18n::tr(current_language, "toolbar.new_column_placeholder");
     let add_column_label = i18n::tr(current_language, "toolbar.add_column");
     let delete_column_label = i18n::tr(current_language, "toolbar.delete_column");
+    let selected_column_label = i18n::tr(current_language, "toolbar.selected_column");
 
     rsx! {
         div { class: "toolbar",
@@ -240,6 +242,7 @@ pub fn Toolbar(
                         if removed {
                             selected_column.set(None);
                             error_message.set(None);
+                            persist_sidecar_if_possible(data, file_path, error_message);
                         } else {
                             error_message.set(Some(
                                 i18n::tr(*language.read(), "error.delete_column_failed").to_string(),
@@ -252,6 +255,13 @@ pub fn Toolbar(
                     }
                 },
                 "{delete_column_label}"
+            }
+            if let Some(col) = selected_column.read().as_ref() {
+                span {
+                    class: "toolbar-label",
+                    id: "label-selected-column",
+                    "{selected_column_label}: {col}"
+                }
             }
             if let Some(path) = file_path.read().as_ref() {
                 span { class: "file-path", "{path.display()}" }
@@ -278,10 +288,10 @@ async fn open_file(
 
     if let Some(handle) = task {
         let path = handle.path().to_path_buf();
-        match json_io::load_json(&path) {
-            Ok(rows) => {
+        match jsheet_io::load_json_and_sidecar(&path) {
+            Ok((rows, jsheet_meta)) => {
                 data.with_mut(|state| {
-                    state.replace_data(rows);
+                    state.replace_data_and_jsheet(rows, jsheet_meta);
                 });
                 file_path.set(Some(path));
                 error_message.set(None);
@@ -300,14 +310,53 @@ fn save_file(
     file_path: Signal<Option<PathBuf>>,
     mut error_message: Signal<Option<String>>,
 ) {
-    if let Some(path) = file_path.read().as_ref() {
-        match json_io::save_json(path, data.read().data()) {
-            Ok(()) => {
-                error_message.set(None);
-            }
-            Err(e) => {
-                error_message.set(Some(e.to_string()));
-            }
+    let path = {
+        let read = file_path.read();
+        let Some(path) = read.as_ref() else {
+            return;
+        };
+        path.clone()
+    };
+
+    let export = match data.read().export_json_data() {
+        Ok(export) => export,
+        Err(err) => {
+            error_message.set(Some(err));
+            return;
         }
+    };
+
+    if let Err(err) = json_io::save_json(&path, &export) {
+        error_message.set(Some(err.to_string()));
+        return;
+    }
+
+    let meta_for_save = data.read().jsheet_meta_for_save();
+    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save) {
+        error_message.set(Some(err.to_string()));
+        return;
+    }
+
+    error_message.set(None);
+}
+
+fn persist_sidecar_if_possible(
+    data: Signal<TableState>,
+    file_path: Signal<Option<PathBuf>>,
+    mut error_message: Signal<Option<String>>,
+) {
+    let path = {
+        let read = file_path.read();
+        let Some(path) = read.as_ref() else {
+            return;
+        };
+        path.clone()
+    };
+
+    let meta_for_save = data.read().jsheet_meta_for_save();
+    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save) {
+        error_message.set(Some(err.to_string()));
+    } else {
+        error_message.set(None);
     }
 }

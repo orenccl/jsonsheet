@@ -139,6 +139,19 @@ async function assertCellContains(page, rowIndex, column, expected, timeout = 50
   );
 }
 
+async function assertSummaryContains(page, column, expected, timeout = 5000) {
+  const selector = `#summary-${column}`;
+  await page.waitForFunction(
+    ({ selector: s, expectedText }) => {
+      const el = document.querySelector(s);
+      if (!el) return false;
+      return (el.textContent || "").includes(expectedText);
+    },
+    { selector, expectedText: expected },
+    { timeout }
+  );
+}
+
 async function assertSearchHighlightStyle(page, rowIndex, column, timeout = 5000) {
   const selector = `#cell-${rowIndex}-${column}`;
   await page.waitForSelector(`${selector}.search-match`, { timeout });
@@ -183,10 +196,18 @@ async function main() {
   runOrThrow("cargo", ["build", "--quiet"], { cwd: root });
 
   const cdpPort = await getFreePort();
+  const tempFixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsonsheet-fixture-"));
+  const fixturePath = path.join(tempFixtureDir, "types.json");
+  fs.copyFileSync(fixture, fixturePath);
+  const fixtureSidecar = `${fixture}.jsheet`;
+  if (fs.existsSync(fixtureSidecar)) {
+    fs.copyFileSync(fixtureSidecar, `${fixturePath}.jsheet`);
+  }
+
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsonsheet-ui-"));
   const env = {
     ...process.env,
-    JSONSHEET_OPEN: fixture,
+    JSONSHEET_OPEN: fixturePath,
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
     WEBVIEW2_USER_DATA_FOLDER: userDataDir,
   };
@@ -205,6 +226,38 @@ async function main() {
     await page.waitForSelector("#table-container", { timeout: 15000 });
     await waitForRowCount(page, 2, 10000);
 
+    // Phase 5: .jsheet sidecar (computed columns + summaries + type constraints).
+    await page.waitForSelector("#col-age2", { timeout: 5000 });
+    await assertCellContains(page, 0, "age2", "60");
+    await assertSummaryContains(page, "age", "27.5");
+    await assertSummaryContains(page, "age2", "110");
+
+    // Cell context menu: range-select then batch update formula.
+    await page.click("#cell-0-age2");
+    await page.click("#cell-1-age2", { modifiers: ["Shift"] });
+    await page.click("#cell-1-age2", { button: "right" });
+    await page.fill("#context-formula", "=age * 3");
+    await page.click("#btn-context-apply-formula");
+    await assertCellContains(page, 0, "age2", "90");
+    await assertCellContains(page, 1, "age2", "75");
+    await assertSummaryContains(page, "age2", "165");
+
+    // Apply cell style from context menu.
+    await page.fill("#context-text-color", "#ff0000");
+    await page.fill("#context-bg-color", "#ffffcc");
+    await page.click("#btn-context-apply-style");
+
+    // Comment column toggle should be available in header controls.
+    await page.fill("#input-new-column", "note");
+    await page.click("#btn-add-column");
+    await page.waitForSelector("#col-note", { timeout: 5000 });
+    await page.click("#meta-comment-note");
+
+    await page.click("#cell-0-age");
+    await page.fill("#cell-input-0-age", "oops");
+    await page.keyboard.press("Enter");
+    await assertCellContains(page, 0, "age", "30");
+
     // Phase 4: i18n language switch.
     await assertElementText(page, "#btn-open", "Open");
     await assertInputPlaceholder(page, "#input-search-query", "Search all cells");
@@ -221,7 +274,7 @@ async function main() {
     await assertCellContains(page, 0, "name", "Zed");
 
     // Phase 3: sort + undo/redo.
-    await page.click("#col-age");
+    await page.click("#sort-age");
     await assertCellContains(page, 0, "name", "Bob");
 
     await page.click("#btn-undo");
