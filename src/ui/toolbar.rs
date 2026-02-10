@@ -256,6 +256,27 @@ pub fn Toolbar(
                 },
                 "{delete_column_label}"
             }
+            {
+                let freeze_label = i18n::tr(current_language, "toolbar.freeze_columns");
+                let frozen = snapshot.frozen_columns();
+                rsx! {
+                    span { class: "toolbar-label", "{freeze_label}" }
+                    input {
+                        class: "toolbar-input toolbar-input-sm",
+                        id: "input-frozen-columns",
+                        r#type: "number",
+                        min: "0",
+                        value: "{frozen}",
+                        oninput: move |evt: Event<FormData>| {
+                            let val = evt.value().parse::<usize>().unwrap_or(0);
+                            data.with_mut(|state| {
+                                state.set_frozen_columns(if val == 0 { None } else { Some(val) });
+                            });
+                            persist_sidecar_if_possible(data, file_path, error_message);
+                        }
+                    }
+                }
+            }
             if let Some(col) = selected_column.read().as_ref() {
                 span {
                     class: "toolbar-label",

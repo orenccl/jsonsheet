@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::io::json_io::{self, JsonIoError, Row};
 use crate::state::jsheet::{
-    ColumnConstraint, ColumnStyle, ConditionalFormat, JSheetMeta, SummaryKind,
+    ColumnConstraint, ColumnStyle, ConditionalFormat, JSheetMeta, SummaryKind, ValidationRule,
 };
 
 #[derive(Debug)]
@@ -90,6 +90,14 @@ struct JSheetFile {
     // Conditional formatting (not row-level, stored directly)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     conditional_formats: Vec<ConditionalFormat>,
+
+    // Validation rules per column
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    validation: BTreeMap<String, ValidationRule>,
+
+    // Freeze panes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frozen_columns: Option<usize>,
 }
 
 impl JSheetFile {
@@ -141,6 +149,8 @@ impl JSheetFile {
             cell_formulas,
             cell_styles,
             conditional_formats: self.conditional_formats,
+            validation: self.validation,
+            frozen_columns: self.frozen_columns,
         }
     }
 
@@ -200,6 +210,8 @@ impl JSheetFile {
             cell_styles: vec_styles,
             comment_rows: vec_comments,
             conditional_formats: meta.conditional_formats.clone(),
+            validation: meta.validation.clone(),
+            frozen_columns: meta.frozen_columns,
         }
     }
 }

@@ -96,6 +96,7 @@ pub fn Table(
     let has_summary = columns
         .iter()
         .any(|column| snapshot.summary_kind(column).is_some());
+    let frozen_count = snapshot.frozen_columns();
     let current_language = *language.read();
 
     if columns.is_empty() {
@@ -121,10 +122,15 @@ pub fn Table(
             table {
                 thead {
                     tr {
-                        th { class: "row-number", "#" }
-                        for col in &columns {
+                        th {
+                            class: if frozen_count > 0 { "row-number frozen-col" } else { "row-number" },
+                            style: if frozen_count > 0 { "left: 0px;" } else { "" },
+                            "#"
+                        }
+                        for (col_idx, col) in columns.iter().enumerate() {
                             th {
-                                class: header_class(col, &selected_column),
+                                class: frozen_header_class(col, &selected_column, col_idx, frozen_count),
+                                style: frozen_left_style(col_idx, frozen_count),
                                 id: format!("col-{}", sanitize_id(col)),
                                 onclick: {
                                     let col_name = col.clone();
@@ -160,14 +166,20 @@ pub fn Table(
                         }
                     }
                     tr { class: "column-meta-row", id: "column-meta-row",
-                        th { class: "row-number meta-label", "meta" }
-                        for col in &columns {
+                        th {
+                            class: if frozen_count > 0 { "row-number meta-label frozen-col" } else { "row-number meta-label" },
+                            style: if frozen_count > 0 { "left: 0px;" } else { "" },
+                            "meta"
+                        }
+                        for (col_idx, col) in columns.iter().enumerate() {
                             ColumnMetaCell {
                                 data,
                                 language,
                                 file_path,
                                 error_message,
                                 column: col.clone(),
+                                frozen: col_idx < frozen_count,
+                                frozen_left: frozen_left_px(col_idx, frozen_count),
                             }
                         }
                     }
@@ -195,6 +207,7 @@ pub fn Table(
                                 drag_selecting,
                                 drag_moved,
                                 search_query: search_query.clone(),
+                                frozen_count,
                             }
                         }
                     }
@@ -202,10 +215,15 @@ pub fn Table(
                 if has_summary {
                     tfoot {
                         tr { class: "summary-row", id: "summary-row",
-                            td { class: "row-number summary-label", "S" }
-                            for col in &columns {
+                            td {
+                                class: if frozen_count > 0 { "row-number summary-label frozen-col" } else { "row-number summary-label" },
+                                style: if frozen_count > 0 { "left: 0px;" } else { "" },
+                                "S"
+                            }
+                            for (col_idx, col) in columns.iter().enumerate() {
                                 td {
-                                    class: "summary-cell",
+                                    class: if col_idx < frozen_count { "summary-cell frozen-col" } else { "summary-cell" },
+                                    style: frozen_left_style(col_idx, frozen_count),
                                     id: format!("summary-{}", sanitize_id(col)),
                                     "{snapshot.summary_display_for_column(col).unwrap_or_default()}"
                                 }
@@ -245,6 +263,8 @@ fn ColumnMetaCell(
     file_path: Signal<Option<PathBuf>>,
     error_message: Signal<Option<String>>,
     column: String,
+    frozen: bool,
+    frozen_left: String,
 ) -> Element {
     let snapshot = data.read().clone();
     let column_type = snapshot
@@ -258,6 +278,7 @@ fn ColumnMetaCell(
         .unwrap_or("none")
         .to_string();
     let is_comment = snapshot.is_comment_column(&column);
+    let validation = snapshot.validation_rule(&column).cloned();
     let current_language = *language.read();
     let option_none = i18n::tr(current_language, "toolbar.option.none");
     let option_type_string = i18n::tr(current_language, "toolbar.option.type_string");
@@ -271,9 +292,21 @@ fn ColumnMetaCell(
     let option_summary_max = i18n::tr(current_language, "toolbar.option.summary_max");
     let meta_comment_label = i18n::tr(current_language, "table.meta_comment");
 
+    let meta_class = if frozen {
+        "column-meta-cell frozen-col"
+    } else {
+        "column-meta-cell"
+    };
+    let meta_style = if frozen {
+        format!("left: {frozen_left};")
+    } else {
+        String::new()
+    };
+
     rsx! {
         th {
-            class: "column-meta-cell",
+            class: "{meta_class}",
+            style: "{meta_style}",
             id: format!("meta-{}", sanitize_id(&column)),
             div { class: "meta-controls",
                 select {
@@ -337,6 +370,90 @@ fn ColumnMetaCell(
                         }
                     }
                     "{meta_comment_label}"
+                }
+                {
+                    let min_label = i18n::tr(current_language, "table.meta_validation_min");
+                    let max_label = i18n::tr(current_language, "table.meta_validation_max");
+                    let enum_label = i18n::tr(current_language, "table.meta_validation_enum");
+                    let min_val = validation
+                        .as_ref()
+                        .and_then(|r| r.min)
+                        .map(format_validation_number)
+                        .unwrap_or_default();
+                    let max_val = validation
+                        .as_ref()
+                        .and_then(|r| r.max)
+                        .map(format_validation_number)
+                        .unwrap_or_default();
+                    let enum_val = validation.as_ref().and_then(|r| r.enum_values.as_ref()).map(|v| v.join(", ")).unwrap_or_default();
+                    rsx! {
+                        div { class: "meta-validation-row",
+                            input {
+                                class: "meta-input-sm",
+                                id: format!("meta-val-min-{}", sanitize_id(&column)),
+                                r#type: "number",
+                                placeholder: "{min_label}",
+                                value: "{min_val}",
+                                onchange: {
+                                    let col = column.clone();
+                                    move |evt: Event<FormData>| {
+                                        let val = evt.value();
+                                        data.with_mut(|state| {
+                                            let mut rule = state.validation_rule(&col).cloned().unwrap_or_default();
+                                            rule.min = if val.trim().is_empty() { None } else { val.trim().parse::<f64>().ok() };
+                                            let is_empty = rule.min.is_none() && rule.max.is_none() && rule.enum_values.is_none();
+                                            state.set_validation_rule(&col, if is_empty { None } else { Some(rule) });
+                                        });
+                                        persist_sidecar_if_possible(data, file_path, error_message);
+                                    }
+                                }
+                            }
+                            input {
+                                class: "meta-input-sm",
+                                id: format!("meta-val-max-{}", sanitize_id(&column)),
+                                r#type: "number",
+                                placeholder: "{max_label}",
+                                value: "{max_val}",
+                                onchange: {
+                                    let col = column.clone();
+                                    move |evt: Event<FormData>| {
+                                        let val = evt.value();
+                                        data.with_mut(|state| {
+                                            let mut rule = state.validation_rule(&col).cloned().unwrap_or_default();
+                                            rule.max = if val.trim().is_empty() { None } else { val.trim().parse::<f64>().ok() };
+                                            let is_empty = rule.min.is_none() && rule.max.is_none() && rule.enum_values.is_none();
+                                            state.set_validation_rule(&col, if is_empty { None } else { Some(rule) });
+                                        });
+                                        persist_sidecar_if_possible(data, file_path, error_message);
+                                    }
+                                }
+                            }
+                            input {
+                                class: "meta-input-sm meta-input-enum",
+                                id: format!("meta-val-enum-{}", sanitize_id(&column)),
+                                placeholder: "{enum_label}",
+                                value: "{enum_val}",
+                                onchange: {
+                                    let col = column.clone();
+                                    move |evt: Event<FormData>| {
+                                        let val = evt.value();
+                                        data.with_mut(|state| {
+                                            let mut rule = state.validation_rule(&col).cloned().unwrap_or_default();
+                                            let trimmed = val.trim();
+                                            rule.enum_values = if trimmed.is_empty() {
+                                                None
+                                            } else {
+                                                Some(trimmed.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                                            };
+                                            let is_empty = rule.min.is_none() && rule.max.is_none() && rule.enum_values.is_none();
+                                            state.set_validation_rule(&col, if is_empty { None } else { Some(rule) });
+                                        });
+                                        persist_sidecar_if_possible(data, file_path, error_message);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -692,6 +809,7 @@ fn TableRow(
     drag_selecting: Signal<bool>,
     drag_moved: Signal<bool>,
     search_query: String,
+    frozen_count: usize,
 ) -> Element {
     let snapshot = data.read().clone();
     let formula_columns: BTreeSet<String> = columns
@@ -718,7 +836,8 @@ fn TableRow(
     rsx! {
         tr { class: "{row_class}", id: format!("row-{data_index}"),
             td {
-                class: "row-number",
+                class: if frozen_count > 0 { "row-number frozen-col" } else { "row-number" },
+                style: if frozen_count > 0 { "left: 0px;" } else { "" },
                 onclick: move |_| {
                     selected_row.set(Some(data_index));
                     context_menu.set(None);
@@ -734,8 +853,8 @@ fn TableRow(
                     .unwrap_or(false)
                 {
                     td {
-                        class: "editing-cell",
-                        style: "{snapshot.cell_inline_style(data_index, col)}",
+                        class: if column_index < frozen_count { "editing-cell frozen-col" } else { "editing-cell" },
+                        style: "{frozen_left_style(column_index, frozen_count)}{snapshot.cell_inline_style(data_index, col)}",
                         input {
                             class: editing_input_class(editing),
                             id: format!("cell-input-{}-{}", data_index, sanitize_id(col)),
@@ -778,9 +897,10 @@ fn TableRow(
                                     })
                                 })
                                 .unwrap_or(false),
+                            column_index < frozen_count,
                         ),
                         id: format!("cell-{}-{}", data_index, sanitize_id(col)),
-                        style: "{snapshot.cell_inline_style(data_index, col)}",
+                        style: "{frozen_left_style(column_index, frozen_count)}{snapshot.cell_inline_style(data_index, col)}",
                         onmousedown: {
                             let col_name = col.clone();
                             move |evt: Event<MouseData>| {
@@ -986,6 +1106,7 @@ fn cell_class(
     search_query: &str,
     has_formula: bool,
     in_selected_range: bool,
+    frozen: bool,
 ) -> String {
     let mut class_name = if has_formula {
         "cell formula-cell"
@@ -999,6 +1120,9 @@ fn cell_class(
     }
     if in_selected_range {
         class_name = join_classes(&class_name, "in-range");
+    }
+    if frozen {
+        class_name = join_classes(&class_name, "frozen-col");
     }
 
     class_name
@@ -1187,6 +1311,47 @@ fn parse_summary_kind(value: &str) -> Option<SummaryKind> {
         "min" => Some(SummaryKind::Min),
         "max" => Some(SummaryKind::Max),
         _ => None,
+    }
+}
+
+const ROW_NUMBER_WIDTH: usize = 50;
+const FROZEN_COL_WIDTH: usize = 150;
+
+fn frozen_left_px(col_idx: usize, frozen_count: usize) -> String {
+    if col_idx >= frozen_count {
+        return String::new();
+    }
+    let left = ROW_NUMBER_WIDTH + col_idx * FROZEN_COL_WIDTH;
+    format!("{left}px")
+}
+
+fn frozen_left_style(col_idx: usize, frozen_count: usize) -> String {
+    if col_idx >= frozen_count {
+        return String::new();
+    }
+    let left = ROW_NUMBER_WIDTH + col_idx * FROZEN_COL_WIDTH;
+    format!("left: {left}px;")
+}
+
+fn frozen_header_class(
+    col: &str,
+    selected_column: &Signal<Option<String>>,
+    col_idx: usize,
+    frozen_count: usize,
+) -> String {
+    let base = header_class(col, selected_column);
+    if col_idx < frozen_count {
+        join_classes(&base, "frozen-col")
+    } else {
+        base
+    }
+}
+
+fn format_validation_number(n: f64) -> String {
+    if n.fract() == 0.0 {
+        format!("{n:.0}")
+    } else {
+        n.to_string()
     }
 }
 
