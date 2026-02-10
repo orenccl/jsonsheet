@@ -90,6 +90,7 @@ body {
     flex: 1;
     overflow: auto;
     padding: 0;
+    position: relative;
 }
 
 .empty-message {
@@ -175,18 +176,6 @@ th.sorted-desc::after {
     color: #5d6880;
 }
 
-.meta-color-wrap {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.meta-color-label {
-    font-size: 11px;
-    color: #5d6880;
-    min-width: 16px;
-}
-
 .meta-color-input {
     width: 30px;
     height: 22px;
@@ -209,19 +198,6 @@ th.sorted-desc::after {
 
 .meta-btn:hover {
     background: #edf3ff;
-}
-
-.meta-formula {
-    margin-top: 6px;
-    font-size: 11px;
-    color: #365aa8;
-    font-family: "Consolas", "Courier New", monospace;
-}
-
-.meta-open-formula-help {
-    margin-top: 4px;
-    font-size: 10px;
-    color: #6e7a90;
 }
 
 .meta-focus-btn {
@@ -281,7 +257,7 @@ tr:hover td.cell.search-match {
     background: #ffe89c;
 }
 
-.computed-cell {
+.formula-cell {
     font-style: italic;
 }
 
@@ -313,5 +289,46 @@ tfoot .summary-row td {
 
 .summary-label {
     color: #4f5f7a;
+}
+
+.cell-context-menu {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    width: 260px;
+    background: #ffffff;
+    border: 1px solid #c8d3ea;
+    border-radius: 8px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+    padding: 10px;
+    z-index: 1000;
+}
+
+.ctx-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #36445f;
+    margin-bottom: 8px;
+}
+
+.ctx-label {
+    display: block;
+    font-size: 11px;
+    color: #56637f;
+    margin: 8px 0 4px;
+}
+
+.ctx-input {
+    width: 100%;
+    border: 1px solid #c8d3ea;
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 12px;
+}
+
+.ctx-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
 }
 

@@ -39,12 +39,17 @@ fn test_load_json_and_sidecar_with_sidecar() {
     let sidecar = jsheet_io::sidecar_path_for_json(&json_path);
     std::fs::write(
         &sidecar,
-        r#"{
+        r##"{
           "columns": { "age": { "type": "number" } },
-          "computed_columns": { "age2": { "formula": "age * 2" } },
+          "cell_formulas": [
+            { "age2": "age * 2" }
+          ],
           "comment_columns": ["note"],
-          "comment_rows": [{ "note": "internal" }]
-        }"#,
+          "comment_rows": [{ "note": "internal" }],
+          "cell_styles": [
+            { "age": { "color": "#aa0000" } }
+          ]
+        }"##,
     )
     .unwrap();
 
@@ -54,14 +59,15 @@ fn test_load_json_and_sidecar_with_sidecar() {
         meta.columns.get("age").unwrap().value_type,
         ColumnType::Number
     );
-    assert_eq!(
-        meta.computed_columns.get("age2").unwrap().formula,
-        "age * 2".to_string()
-    );
+    assert_eq!(meta.formula_for_cell(0, "age2"), Some("age * 2"));
     assert!(meta.comment_columns.contains("note"));
     assert_eq!(
         meta.comment_rows[0]["note"],
         Value::String("internal".to_string())
+    );
+    assert_eq!(
+        meta.cell_style(0, "age").and_then(|s| s.color.clone()),
+        Some("#aa0000".to_string())
     );
 }
 
@@ -72,12 +78,14 @@ fn test_save_sidecar_for_json_roundtrip() {
     jsonsheet::io::json_io::save_json(&json_path, &sample_rows()).unwrap();
 
     let mut meta = JSheetMeta::default();
-    meta.set_computed_column("age2".to_string(), "age * 2".to_string());
+    assert!(meta.set_formula_for_cell(0, "age2", "age * 2".to_string()));
+    meta.set_cell_style(0, "age", Some("#aa0000".to_string()), None);
     jsheet_io::save_sidecar_for_json(&json_path, &meta).unwrap();
 
     let loaded = jsheet_io::load_sidecar_for_json(&json_path).unwrap();
+    assert_eq!(loaded.formula_for_cell(0, "age2"), Some("age * 2"));
     assert_eq!(
-        loaded.computed_columns.get("age2").unwrap().formula,
-        "age * 2".to_string()
+        loaded.cell_style(0, "age").and_then(|s| s.color.clone()),
+        Some("#aa0000".to_string())
     );
 }

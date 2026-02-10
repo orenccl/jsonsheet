@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use dioxus::prelude::{Key, *};
@@ -14,6 +14,12 @@ struct EditingCell {
     row: usize,
     column: String,
     draft: String,
+}
+
+#[derive(Clone, PartialEq)]
+struct ContextCellMenu {
+    row: usize,
+    column: String,
 }
 
 enum CommitResult {
@@ -32,27 +38,16 @@ pub fn Table(
     selected_column: Signal<Option<String>>,
 ) -> Element {
     let editing = use_signal::<Option<EditingCell>>(|| None);
+    let mut context_menu = use_signal::<Option<ContextCellMenu>>(|| None);
+    let context_formula = use_signal(String::new);
+    let context_text_color = use_signal(|| "#1a1a1a".to_string());
+    let context_bg_color = use_signal(|| "#ffffff".to_string());
+
     let snapshot = data.read().clone();
     let columns = snapshot.display_columns();
     let visible_rows = snapshot.visible_row_indices();
     let search_query = snapshot.search_query().to_string();
     let sort_spec = snapshot.sort_spec().cloned();
-    let computed_columns: BTreeSet<String> = snapshot
-        .jsheet_meta()
-        .computed_columns
-        .keys()
-        .cloned()
-        .collect();
-    let computed_formulas: BTreeMap<String, String> = snapshot
-        .jsheet_meta()
-        .computed_columns
-        .iter()
-        .map(|(column, computed)| (column.clone(), computed.formula.clone()))
-        .collect();
-    let column_styles: BTreeMap<String, String> = columns
-        .iter()
-        .map(|col| (col.clone(), snapshot.column_inline_style(col)))
-        .collect();
     let has_summary = columns
         .iter()
         .any(|column| snapshot.summary_kind(column).is_some());
@@ -66,7 +61,12 @@ pub fn Table(
     }
 
     rsx! {
-        div { class: "table-container", id: "table-container",
+        div {
+            class: "table-container",
+            id: "table-container",
+            onclick: move |_| {
+                context_menu.set(None);
+            },
             table {
                 thead {
                     tr {
@@ -75,7 +75,6 @@ pub fn Table(
                             th {
                                 class: header_class(col, &sort_spec, &selected_column),
                                 id: format!("col-{}", sanitize_id(col)),
-                                style: "{column_styles.get(col).cloned().unwrap_or_default()}",
                                 onclick: {
                                     let col_name = col.clone();
                                     let mut data = data;
@@ -92,7 +91,7 @@ pub fn Table(
                         }
                     }
                     tr { class: "column-meta-row", id: "column-meta-row",
-                        th { class: "row-number meta-label", "≡" }
+                        th { class: "row-number meta-label", "meta" }
                         for col in &columns {
                             ColumnMetaCell {
                                 data,
@@ -113,9 +112,6 @@ pub fn Table(
                                 data_index: *data_index,
                                 row,
                                 columns: columns.clone(),
-                                computed_columns: computed_columns.clone(),
-                                computed_formulas: computed_formulas.clone(),
-                                column_styles: column_styles.clone(),
                                 data,
                                 language,
                                 file_path,
@@ -123,6 +119,10 @@ pub fn Table(
                                 selected_row,
                                 selected_column,
                                 editing,
+                                context_menu,
+                                context_formula,
+                                context_text_color,
+                                context_bg_color,
                                 search_query: search_query.clone(),
                             }
                         }
@@ -131,17 +131,31 @@ pub fn Table(
                 if has_summary {
                     tfoot {
                         tr { class: "summary-row", id: "summary-row",
-                            td { class: "row-number summary-label", "Σ" }
+                            td { class: "row-number summary-label", "S" }
                             for col in &columns {
                                 td {
                                     class: "summary-cell",
                                     id: format!("summary-{}", sanitize_id(col)),
-                                    style: "{column_styles.get(col).cloned().unwrap_or_default()}",
                                     "{snapshot.summary_display_for_column(col).unwrap_or_default()}"
                                 }
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(menu) = context_menu.read().as_ref().cloned() {
+                CellContextMenu {
+                    data,
+                    language,
+                    file_path,
+                    error_message,
+                    context_menu,
+                    context_formula,
+                    context_text_color,
+                    context_bg_color,
+                    row_index: menu.row,
+                    column: menu.column,
                 }
             }
         }
@@ -169,13 +183,6 @@ fn ColumnMetaCell(
         .unwrap_or("none")
         .to_string();
     let is_comment = snapshot.is_comment_column(&column);
-    let style = snapshot.column_style(&column).unwrap_or_default();
-    let text_color = style.color.unwrap_or_else(|| "#1a1a1a".to_string());
-    let background_color = style.background.unwrap_or_else(|| "#ffffff".to_string());
-    let computed_formula = snapshot
-        .computed_column(&column)
-        .map(|computed| format!("={}", computed.formula))
-        .unwrap_or_default();
     let current_language = *language.read();
     let option_none = i18n::tr(current_language, "toolbar.option.none");
     let option_type_string = i18n::tr(current_language, "toolbar.option.type_string");
@@ -188,8 +195,6 @@ fn ColumnMetaCell(
     let option_summary_min = i18n::tr(current_language, "toolbar.option.summary_min");
     let option_summary_max = i18n::tr(current_language, "toolbar.option.summary_max");
     let meta_comment_label = i18n::tr(current_language, "table.meta_comment");
-    let meta_style_reset_label = i18n::tr(current_language, "table.meta_style_reset");
-    let meta_formula_hint_label = i18n::tr(current_language, "table.meta_formula_hint");
     let meta_focus_label = i18n::tr(current_language, "table.meta_focus");
 
     rsx! {
@@ -259,70 +264,6 @@ fn ColumnMetaCell(
                     }
                     "{meta_comment_label}"
                 }
-                div { class: "meta-color-wrap",
-                    span { class: "meta-color-label", "A" }
-                    input {
-                        class: "meta-color-input",
-                        id: format!("meta-text-color-{}", sanitize_id(&column)),
-                        r#type: "color",
-                        value: "{text_color}",
-                        oninput: {
-                            let column_name = column.clone();
-                            let mut data = data;
-                            move |evt: Event<FormData>| {
-                                let value = evt.value();
-                                data.with_mut(|state| {
-                                    let current = state.column_style(&column_name).unwrap_or_default();
-                                    state.set_column_style(&column_name, Some(value), current.background);
-                                });
-                                persist_sidecar_if_possible(data, file_path, error_message);
-                            }
-                        }
-                    }
-                }
-                div { class: "meta-color-wrap",
-                    span { class: "meta-color-label", "Bg" }
-                    input {
-                        class: "meta-color-input",
-                        id: format!("meta-bg-color-{}", sanitize_id(&column)),
-                        r#type: "color",
-                        value: "{background_color}",
-                        oninput: {
-                            let column_name = column.clone();
-                            let mut data = data;
-                            move |evt: Event<FormData>| {
-                                let value = evt.value();
-                                data.with_mut(|state| {
-                                    let current = state.column_style(&column_name).unwrap_or_default();
-                                    state.set_column_style(&column_name, current.color, Some(value));
-                                });
-                                persist_sidecar_if_possible(data, file_path, error_message);
-                            }
-                        }
-                    }
-                }
-                button {
-                    class: "meta-btn",
-                    id: format!("meta-style-clear-{}", sanitize_id(&column)),
-                    onclick: {
-                        let column_name = column.clone();
-                        let mut data = data;
-                        move |_| {
-                            data.with_mut(|state| {
-                                state.set_column_style(&column_name, None, None);
-                            });
-                            persist_sidecar_if_possible(data, file_path, error_message);
-                        }
-                    },
-                    "{meta_style_reset_label}"
-                }
-            }
-            if !computed_formula.is_empty() {
-                div { class: "meta-formula", "{computed_formula}" }
-            }
-            div {
-                class: "meta-open-formula-help",
-                "{meta_formula_hint_label}"
             }
             button {
                 class: "meta-focus-btn",
@@ -337,14 +278,150 @@ fn ColumnMetaCell(
 }
 
 #[component]
+fn CellContextMenu(
+    data: Signal<TableState>,
+    language: Signal<Language>,
+    file_path: Signal<Option<PathBuf>>,
+    error_message: Signal<Option<String>>,
+    context_menu: Signal<Option<ContextCellMenu>>,
+    context_formula: Signal<String>,
+    context_text_color: Signal<String>,
+    context_bg_color: Signal<String>,
+    row_index: usize,
+    column: String,
+) -> Element {
+    let current_language = *language.read();
+    let formula_label = i18n::tr(current_language, "table.ctx_formula");
+    let apply_formula_label = i18n::tr(current_language, "table.ctx_apply_formula");
+    let clear_formula_label = i18n::tr(current_language, "table.ctx_clear_formula");
+    let text_color_label = i18n::tr(current_language, "table.ctx_text_color");
+    let bg_color_label = i18n::tr(current_language, "table.ctx_bg_color");
+    let apply_style_label = i18n::tr(current_language, "table.ctx_apply_style");
+    let clear_style_label = i18n::tr(current_language, "table.ctx_clear_style");
+    let close_label = i18n::tr(current_language, "table.ctx_close");
+
+    rsx! {
+        div {
+            class: "cell-context-menu",
+            id: format!("context-menu-{}-{}", row_index, sanitize_id(&column)),
+            onclick: move |evt| evt.stop_propagation(),
+            div { class: "ctx-title", "R{row_index + 1} / {column}" }
+
+            label { class: "ctx-label", "{formula_label}" }
+            input {
+                class: "ctx-input",
+                id: "context-formula",
+                value: "{context_formula.read()}",
+                oninput: move |evt| {
+                    context_formula.set(evt.value());
+                }
+            }
+
+            div { class: "ctx-row",
+                button {
+                    class: "meta-btn",
+                    id: "btn-context-apply-formula",
+                    onclick: {
+                        let col = column.clone();
+                        move |_| {
+                            let formula = context_formula.read().clone();
+                            let ok = data.with_mut(|state| state.set_cell_formula(row_index, &col, formula));
+                            if ok {
+                                persist_sidecar_if_possible(data, file_path, error_message);
+                            } else {
+                                error_message.set(Some(
+                                    i18n::tr(*language.read(), "error.invalid_computed_formula").to_string(),
+                                ));
+                            }
+                        }
+                    },
+                    "{apply_formula_label}"
+                }
+                button {
+                    class: "meta-btn",
+                    id: "btn-context-clear-formula",
+                    onclick: {
+                        let col = column.clone();
+                        move |_| {
+                            data.with_mut(|state| state.remove_cell_formula(row_index, &col));
+                            context_formula.set(String::new());
+                            persist_sidecar_if_possible(data, file_path, error_message);
+                        }
+                    },
+                    "{clear_formula_label}"
+                }
+            }
+
+            label { class: "ctx-label", "{text_color_label}" }
+            input {
+                class: "meta-color-input",
+                id: "context-text-color",
+                r#type: "color",
+                value: "{context_text_color.read()}",
+                oninput: move |evt: Event<FormData>| {
+                    context_text_color.set(evt.value());
+                }
+            }
+            label { class: "ctx-label", "{bg_color_label}" }
+            input {
+                class: "meta-color-input",
+                id: "context-bg-color",
+                r#type: "color",
+                value: "{context_bg_color.read()}",
+                oninput: move |evt: Event<FormData>| {
+                    context_bg_color.set(evt.value());
+                }
+            }
+
+            div { class: "ctx-row",
+                button {
+                    class: "meta-btn",
+                    id: "btn-context-apply-style",
+                    onclick: {
+                        let col = column.clone();
+                        move |_| {
+                            let color = Some(context_text_color.read().clone());
+                            let background = Some(context_bg_color.read().clone());
+                            data.with_mut(|state| state.set_cell_style(row_index, &col, color, background));
+                            persist_sidecar_if_possible(data, file_path, error_message);
+                        }
+                    },
+                    "{apply_style_label}"
+                }
+                button {
+                    class: "meta-btn",
+                    id: "btn-context-clear-style",
+                    onclick: {
+                        let col = column.clone();
+                        move |_| {
+                            data.with_mut(|state| state.clear_cell_style(row_index, &col));
+                            context_text_color.set("#1a1a1a".to_string());
+                            context_bg_color.set("#ffffff".to_string());
+                            persist_sidecar_if_possible(data, file_path, error_message);
+                        }
+                    },
+                    "{clear_style_label}"
+                }
+            }
+
+            button {
+                class: "meta-focus-btn",
+                id: "btn-context-close",
+                onclick: move |_| {
+                    context_menu.set(None);
+                },
+                "{close_label}"
+            }
+        }
+    }
+}
+
+#[component]
 fn TableRow(
     display_index: usize,
     data_index: usize,
     row: Row,
     columns: Vec<String>,
-    computed_columns: BTreeSet<String>,
-    computed_formulas: BTreeMap<String, String>,
-    column_styles: BTreeMap<String, String>,
     data: Signal<TableState>,
     language: Signal<Language>,
     file_path: Signal<Option<PathBuf>>,
@@ -352,8 +429,19 @@ fn TableRow(
     selected_row: Signal<Option<usize>>,
     selected_column: Signal<Option<String>>,
     editing: Signal<Option<EditingCell>>,
+    context_menu: Signal<Option<ContextCellMenu>>,
+    context_formula: Signal<String>,
+    context_text_color: Signal<String>,
+    context_bg_color: Signal<String>,
     search_query: String,
 ) -> Element {
+    let snapshot = data.read().clone();
+    let formula_columns: BTreeSet<String> = columns
+        .iter()
+        .filter(|col| snapshot.cell_formula(data_index, col).is_some())
+        .cloned()
+        .collect();
+
     let is_selected = selected_row
         .read()
         .as_ref()
@@ -374,8 +462,8 @@ fn TableRow(
             td {
                 class: "row-number",
                 onclick: move |_| {
-                    let mut selected_row = selected_row;
                     selected_row.set(Some(data_index));
+                    context_menu.set(None);
                 },
                 "{display_index + 1}"
             }
@@ -386,8 +474,9 @@ fn TableRow(
                     .map(|cell| cell.row == data_index && cell.column == col.as_str())
                     .unwrap_or(false)
                 {
-                    td { class: "editing-cell",
-                        style: "{column_styles.get(col).cloned().unwrap_or_default()}",
+                    td {
+                        class: "editing-cell",
+                        style: "{snapshot.cell_inline_style(data_index, col)}",
                         input {
                             class: editing_input_class(editing),
                             id: format!("cell-input-{}-{}", data_index, sanitize_id(col)),
@@ -395,7 +484,6 @@ fn TableRow(
                             autofocus: true,
                             oninput: move |evt| {
                                 let value = evt.value();
-                                let mut editing = editing;
                                 editing.with_mut(|cell| {
                                     if let Some(cell) = cell {
                                         cell.draft = value;
@@ -408,10 +496,7 @@ fn TableRow(
                             onkeydown: move |evt| {
                                 match evt.key() {
                                     Key::Enter => commit_edit(data, language, file_path, error_message, editing),
-                                    Key::Escape => {
-                                        let mut editing = editing;
-                                        editing.set(None);
-                                    }
+                                    Key::Escape => editing.set(None),
                                     _ => {}
                                 }
                             }
@@ -419,24 +504,23 @@ fn TableRow(
                     }
                 } else {
                     td {
-                        class: cell_class(&row, col, &search_query, computed_columns.contains(col)),
+                        class: cell_class(&row, col, &search_query, formula_columns.contains(col)),
                         id: format!("cell-{}-{}", data_index, sanitize_id(col)),
-                        style: "{column_styles.get(col).cloned().unwrap_or_default()}",
+                        style: "{snapshot.cell_inline_style(data_index, col)}",
                         onclick: {
-                            let mut selected_row = selected_row;
-                            let mut selected_column = selected_column;
-                            let mut editing = editing;
                             let col_name = col.clone();
                             let display_for_edit = row
                                 .get(col)
                                 .map(data_model::display_value)
                                 .unwrap_or_default();
-                            let formula_for_edit = computed_formulas
-                                .get(col)
+                            let formula_for_edit = snapshot
+                                .cell_formula(data_index, col)
                                 .map(|formula| format!("={formula}"));
                             move |_| {
                                 selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
+                                context_menu.set(None);
+
                                 let draft = formula_for_edit
                                     .clone()
                                     .unwrap_or_else(|| display_for_edit.clone());
@@ -444,6 +528,31 @@ fn TableRow(
                                     row: data_index,
                                     column: col_name.clone(),
                                     draft,
+                                }));
+                            }
+                        },
+                        oncontextmenu: {
+                            let col_name = col.clone();
+                            move |evt: Event<MouseData>| {
+                                evt.prevent_default();
+                                selected_row.set(Some(data_index));
+                                selected_column.set(Some(col_name.clone()));
+                                editing.set(None);
+
+                                let state = data.read();
+                                let formula = state
+                                    .cell_formula(data_index, &col_name)
+                                    .map(|f| format!("={f}"))
+                                    .unwrap_or_default();
+                                let style = state.cell_style(data_index, &col_name).unwrap_or_default();
+                                context_formula.set(formula);
+                                context_text_color
+                                    .set(style.color.unwrap_or_else(|| "#1a1a1a".to_string()));
+                                context_bg_color
+                                    .set(style.background.unwrap_or_else(|| "#ffffff".to_string()));
+                                context_menu.set(Some(ContextCellMenu {
+                                    row: data_index,
+                                    column: col_name.clone(),
                                 }));
                             }
                         },
@@ -482,16 +591,18 @@ fn header_class(
     join_classes(selected_class, sort_class)
 }
 
-fn cell_class(row: &Row, column: &str, search_query: &str, is_computed: bool) -> String {
-    let mut class_name = if is_computed {
-        "cell computed-cell"
+fn cell_class(row: &Row, column: &str, search_query: &str, has_formula: bool) -> String {
+    let mut class_name = if has_formula {
+        "cell formula-cell"
     } else {
         "cell"
     }
     .to_string();
+
     if cell_matches_query(row, column, search_query) {
         class_name = join_classes(&class_name, "search-match");
     }
+
     class_name
 }
 
@@ -543,17 +654,16 @@ fn commit_edit(
         let draft_trimmed = edit.draft.trim().to_string();
         let (result, sidecar_changed) = data.with_mut(|state| {
             if draft_trimmed.starts_with('=') {
-                if state.set_computed_column(&edit.column, draft_trimmed.clone()) {
+                if state.set_cell_formula(edit.row, &edit.column, draft_trimmed.clone()) {
                     (CommitResult::Applied, true)
                 } else {
                     (CommitResult::InvalidFormula, false)
                 }
-            } else if let Some(previous_computed) = state.computed_column(&edit.column).cloned() {
-                state.remove_computed_column(&edit.column);
+            } else if state.cell_formula(edit.row, &edit.column).is_some() {
                 if state.set_cell_from_input(edit.row, &edit.column, &edit.draft) {
+                    state.remove_cell_formula(edit.row, &edit.column);
                     (CommitResult::Applied, true)
                 } else {
-                    state.set_computed_column(&edit.column, previous_computed.formula);
                     (CommitResult::InvalidTypedValue, false)
                 }
             } else if state.set_cell_from_input(edit.row, &edit.column, &edit.draft) {
@@ -583,6 +693,7 @@ fn commit_edit(
             }
         }
     }
+
     editing.set(None);
 }
 

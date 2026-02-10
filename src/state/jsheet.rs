@@ -11,15 +11,15 @@ pub struct JSheetMeta {
     #[serde(default)]
     pub columns: BTreeMap<String, ColumnConstraint>,
     #[serde(default)]
-    pub computed_columns: BTreeMap<String, ComputedColumn>,
-    #[serde(default)]
     pub comment_columns: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comment_rows: Vec<Row>,
     #[serde(default)]
     pub summaries: BTreeMap<String, SummaryKind>,
-    #[serde(default)]
-    pub styles: BTreeMap<String, ColumnStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_formulas: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_styles: Vec<BTreeMap<String, ColumnStyle>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,11 +35,6 @@ pub enum ColumnType {
 pub struct ColumnConstraint {
     #[serde(rename = "type")]
     pub value_type: ColumnType,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ComputedColumn {
-    pub formula: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,10 +59,14 @@ impl JSheetMeta {
     pub fn display_columns(&self, data: &TableData) -> Vec<String> {
         let mut all: BTreeSet<String> = data_model::derive_columns(data).into_iter().collect();
         all.extend(self.columns.keys().cloned());
-        all.extend(self.computed_columns.keys().cloned());
         all.extend(self.comment_columns.iter().cloned());
         all.extend(self.summaries.keys().cloned());
-        all.extend(self.styles.keys().cloned());
+        for row in &self.cell_formulas {
+            all.extend(row.keys().cloned());
+        }
+        for row in &self.cell_styles {
+            all.extend(row.keys().cloned());
+        }
         all.into_iter().collect()
     }
 
@@ -91,19 +90,131 @@ impl JSheetMeta {
         }
     }
 
-    pub fn computed_column(&self, column: &str) -> Option<&ComputedColumn> {
-        self.computed_columns.get(column)
+    pub fn resize_row_metadata(&mut self, row_count: usize) {
+        self.ensure_row_metadata_len(row_count);
+        self.cell_formulas.truncate(row_count);
+        self.cell_styles.truncate(row_count);
     }
 
-    pub fn set_computed_column(&mut self, column: String, formula: String) {
-        let formula =
-            Self::normalize_formula(&formula).unwrap_or_else(|| formula.trim().to_string());
-        self.computed_columns
-            .insert(column, ComputedColumn { formula });
+    pub fn remove_row_metadata(&mut self, row_index: usize) {
+        if row_index < self.cell_formulas.len() {
+            self.cell_formulas.remove(row_index);
+        }
+        if row_index < self.cell_styles.len() {
+            self.cell_styles.remove(row_index);
+        }
     }
 
-    pub fn remove_computed_column(&mut self, column: &str) {
-        self.computed_columns.remove(column);
+    pub fn reorder_row_metadata(&mut self, ordered_old_indices: &[usize]) {
+        let old_formulas = std::mem::take(&mut self.cell_formulas);
+        let old_styles = std::mem::take(&mut self.cell_styles);
+
+        self.cell_formulas = ordered_old_indices
+            .iter()
+            .map(|idx| old_formulas.get(*idx).cloned().unwrap_or_default())
+            .collect();
+        self.cell_styles = ordered_old_indices
+            .iter()
+            .map(|idx| old_styles.get(*idx).cloned().unwrap_or_default())
+            .collect();
+    }
+
+    pub fn formula_for_cell(&self, row_index: usize, column: &str) -> Option<&str> {
+        self.cell_formulas
+            .get(row_index)
+            .and_then(|row| row.get(column))
+            .map(String::as_str)
+    }
+
+    pub fn set_formula_for_cell(
+        &mut self,
+        row_index: usize,
+        column: &str,
+        formula: String,
+    ) -> bool {
+        let column = column.trim();
+        if column.is_empty() {
+            return false;
+        }
+        let Some(formula) = Self::normalize_formula(&formula) else {
+            return false;
+        };
+        if !Self::validate_formula(&formula) {
+            return false;
+        }
+
+        self.ensure_row_metadata_len(row_index + 1);
+        self.cell_formulas[row_index].insert(column.to_string(), formula);
+        true
+    }
+
+    pub fn remove_formula_for_cell(&mut self, row_index: usize, column: &str) {
+        if let Some(row) = self.cell_formulas.get_mut(row_index) {
+            row.remove(column);
+        }
+    }
+
+    pub fn cell_style(&self, row_index: usize, column: &str) -> Option<&ColumnStyle> {
+        self.cell_styles
+            .get(row_index)
+            .and_then(|row| row.get(column))
+    }
+
+    pub fn set_cell_style(
+        &mut self,
+        row_index: usize,
+        column: &str,
+        color: Option<String>,
+        background: Option<String>,
+    ) {
+        let color = normalize_color(color);
+        let background = normalize_color(background);
+
+        self.ensure_row_metadata_len(row_index + 1);
+        if color.is_none() && background.is_none() {
+            if let Some(row) = self.cell_styles.get_mut(row_index) {
+                row.remove(column);
+            }
+        } else {
+            self.cell_styles[row_index]
+                .insert(column.to_string(), ColumnStyle { color, background });
+        }
+    }
+
+    fn ensure_row_metadata_len(&mut self, row_count: usize) {
+        if self.cell_formulas.len() < row_count {
+            self.cell_formulas
+                .resize_with(row_count, BTreeMap::<String, String>::new);
+        }
+        if self.cell_styles.len() < row_count {
+            self.cell_styles
+                .resize_with(row_count, BTreeMap::<String, ColumnStyle>::new);
+        }
+    }
+
+    pub fn clear_cell_style(&mut self, row_index: usize, column: &str) {
+        if let Some(row) = self.cell_styles.get_mut(row_index) {
+            row.remove(column);
+        }
+    }
+
+    pub fn cell_style_inline(&self, row_index: usize, column: &str) -> String {
+        let Some(style) = self.cell_style(row_index, column) else {
+            return String::new();
+        };
+
+        let mut out = String::new();
+        if let Some(color) = style.color.as_deref() {
+            out.push_str("color: ");
+            out.push_str(color);
+            out.push(';');
+        }
+        if let Some(background) = style.background.as_deref() {
+            out.push_str("background-color: ");
+            out.push_str(background);
+            out.push(';');
+        }
+        out
     }
 
     pub fn is_comment_column(&self, column: &str) -> bool {
@@ -179,50 +290,19 @@ impl JSheetMeta {
         }
     }
 
-    pub fn style(&self, column: &str) -> Option<&ColumnStyle> {
-        self.styles.get(column)
-    }
-
-    pub fn set_style(&mut self, column: &str, color: Option<String>, background: Option<String>) {
-        let color = normalize_color(color);
-        let background = normalize_color(background);
-
-        if color.is_none() && background.is_none() {
-            self.styles.remove(column);
-        } else {
-            self.styles
-                .insert(column.to_string(), ColumnStyle { color, background });
-        }
-    }
-
     pub fn remove_column_metadata(&mut self, column: &str) {
         self.columns.remove(column);
-        self.computed_columns.remove(column);
         self.comment_columns.remove(column);
         for row in &mut self.comment_rows {
             row.remove(column);
         }
         self.summaries.remove(column);
-        self.styles.remove(column);
-    }
-
-    pub fn style_inline(&self, column: &str) -> String {
-        let Some(style) = self.style(column) else {
-            return String::new();
-        };
-
-        let mut out = String::new();
-        if let Some(color) = style.color.as_deref() {
-            out.push_str("color: ");
-            out.push_str(color);
-            out.push(';');
+        for row in &mut self.cell_formulas {
+            row.remove(column);
         }
-        if let Some(background) = style.background.as_deref() {
-            out.push_str("background-color: ");
-            out.push_str(background);
-            out.push(';');
+        for row in &mut self.cell_styles {
+            row.remove(column);
         }
-        out
     }
 
     pub fn validate_formula(formula: &str) -> bool {
@@ -243,8 +323,8 @@ impl JSheetMeta {
         Some(formula.to_string())
     }
 
-    pub fn value_for_column(&self, row: &Row, column: &str) -> Option<Value> {
-        self.value_for_column_inner(row, column, &mut BTreeSet::new())
+    pub fn value_for_cell(&self, row: &Row, row_index: usize, column: &str) -> Option<Value> {
+        self.value_for_cell_inner(row, row_index, column, &mut BTreeSet::new())
     }
 
     pub fn coerce_value_for_column(
@@ -268,8 +348,10 @@ impl JSheetMeta {
         let kind = self.summary_kind(column)?;
         let values: Vec<Value> = visible_rows
             .iter()
-            .filter_map(|idx| data.get(*idx))
-            .filter_map(|row| self.value_for_column(row, column))
+            .filter_map(|idx| {
+                data.get(*idx)
+                    .and_then(|row| self.value_for_cell(row, *idx, column))
+            })
             .collect();
 
         match kind {
@@ -291,8 +373,19 @@ impl JSheetMeta {
         }
     }
 
-    pub fn export_row_with_baked_computed(&self, row: &Row) -> Result<Row, String> {
+    pub fn export_row_with_formulas(&self, row: &Row, row_index: usize) -> Result<Row, String> {
         let mut out = row.clone();
+
+        if let Some(row_formulas) = self.cell_formulas.get(row_index) {
+            for column in row_formulas.keys() {
+                let Some(value) = self.value_for_cell(row, row_index, column) else {
+                    return Err(format!(
+                        "Failed to evaluate formula at row {row_index}, column '{column}'"
+                    ));
+                };
+                out.insert(column.clone(), value);
+            }
+        }
 
         for (column, constraint) in &self.columns {
             if let Some(value) = out.get(column).cloned() {
@@ -305,13 +398,6 @@ impl JSheetMeta {
             }
         }
 
-        for column in self.computed_columns.keys() {
-            let Some(value) = self.value_for_column(&out, column) else {
-                return Err(format!("Failed to evaluate computed column '{column}'"));
-            };
-            out.insert(column.clone(), value);
-        }
-
         for column in &self.comment_columns {
             out.remove(column);
         }
@@ -319,42 +405,52 @@ impl JSheetMeta {
         Ok(out)
     }
 
-    fn value_for_column_inner(
+    fn value_for_cell_inner(
         &self,
         row: &Row,
+        row_index: usize,
         column: &str,
-        stack: &mut BTreeSet<String>,
+        stack: &mut BTreeSet<(usize, String)>,
     ) -> Option<Value> {
-        if let Some(computed) = self.computed_column(column) {
-            if !stack.insert(column.to_string()) {
+        if let Some(formula) = self.formula_for_cell(row_index, column) {
+            let key = (row_index, column.to_string());
+            if !stack.insert(key.clone()) {
                 return None;
             }
 
-            let parsed = Parser::new(&computed.formula).parse().ok()?;
-            let value = self.eval_expr_for_row(&parsed, row, stack);
-            stack.remove(column);
+            let parsed = Parser::new(formula).parse().ok()?;
+            let value = self.eval_expr_for_row(&parsed, row, row_index, stack);
+            stack.remove(&key);
             return Some(value);
         }
 
         row.get(column).cloned()
     }
 
-    fn eval_expr_for_row(&self, expr: &Expr, row: &Row, stack: &mut BTreeSet<String>) -> Value {
+    fn eval_expr_for_row(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        row_index: usize,
+        stack: &mut BTreeSet<(usize, String)>,
+    ) -> Value {
         match expr {
             Expr::Number(n) => json_number_from_f64(*n)
                 .map(Value::Number)
                 .unwrap_or(Value::Null),
             Expr::String(s) => Value::String(s.clone()),
             Expr::Ident(name) => self
-                .value_for_column_inner(row, name, stack)
+                .value_for_cell_inner(row, row_index, name, stack)
                 .unwrap_or(Value::Null),
-            Expr::UnaryMinus(inner) => value_as_f64(self.eval_expr_for_row(inner, row, stack))
-                .and_then(|n| json_number_from_f64(-n))
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
+            Expr::UnaryMinus(inner) => {
+                value_as_f64(self.eval_expr_for_row(inner, row, row_index, stack))
+                    .and_then(|n| json_number_from_f64(-n))
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }
             Expr::Binary { op, left, right } => {
-                let left = self.eval_expr_for_row(left, row, stack);
-                let right = self.eval_expr_for_row(right, row, stack);
+                let left = self.eval_expr_for_row(left, row, row_index, stack);
+                let right = self.eval_expr_for_row(right, row, row_index, stack);
                 eval_binary(*op, left, right)
             }
         }

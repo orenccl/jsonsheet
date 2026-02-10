@@ -196,10 +196,18 @@ async function main() {
   runOrThrow("cargo", ["build", "--quiet"], { cwd: root });
 
   const cdpPort = await getFreePort();
+  const tempFixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsonsheet-fixture-"));
+  const fixturePath = path.join(tempFixtureDir, "types.json");
+  fs.copyFileSync(fixture, fixturePath);
+  const fixtureSidecar = `${fixture}.jsheet`;
+  if (fs.existsSync(fixtureSidecar)) {
+    fs.copyFileSync(fixtureSidecar, `${fixturePath}.jsheet`);
+  }
+
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsonsheet-ui-"));
   const env = {
     ...process.env,
-    JSONSHEET_OPEN: fixture,
+    JSONSHEET_OPEN: fixturePath,
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
     WEBVIEW2_USER_DATA_FOLDER: userDataDir,
   };
@@ -224,13 +232,17 @@ async function main() {
     await assertSummaryContains(page, "age", "27.5");
     await assertSummaryContains(page, "age2", "110");
 
-    // Excel-like formula edit mode: typing '=' updates computed formula.
-    await page.click("#cell-0-age2");
-    await page.fill("#cell-input-0-age2", "=age * 3");
-    await page.waitForSelector("#cell-input-0-age2.formula-input", { timeout: 5000 });
-    await page.keyboard.press("Enter");
+    // Cell context menu: right-click to update single-cell formula.
+    await page.click("#cell-0-age2", { button: "right" });
+    await page.fill("#context-formula", "=age * 3");
+    await page.click("#btn-context-apply-formula");
     await assertCellContains(page, 0, "age2", "90");
-    await assertSummaryContains(page, "age2", "165");
+    await assertSummaryContains(page, "age2", "140");
+
+    // Apply cell style from context menu.
+    await page.fill("#context-text-color", "#ff0000");
+    await page.fill("#context-bg-color", "#ffffcc");
+    await page.click("#btn-context-apply-style");
 
     // Comment column toggle should be available in header controls.
     await page.fill("#input-new-column", "note");

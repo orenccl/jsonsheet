@@ -4,11 +4,6 @@
       "type": "number"
     }
   },
-  "computed_columns": {
-    "age2": {
-      "formula": "age * 3"
-    }
-  },
   "comment_columns": [
     "note"
   ],
@@ -24,9 +19,20 @@
     "age": "AVG",
     "age2": "SUM"
   },
-  "styles": {
-    "age": {
-      "color": "#aa0000"
+  "cell_formulas": [
+    {
+      "age2": "age * 2"
+    },
+    {
+      "age2": "age * 2"
     }
-  }
+  ],
+  "cell_styles": [
+    {
+      "age": {
+        "color": "#aa0000"
+      }
+    },
+    {}
+  ]
 }

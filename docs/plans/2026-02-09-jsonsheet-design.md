@@ -136,12 +136,11 @@ JSON-based metadata file containing:
     "active": { "type": "bool" }
   },
 
-  // Computed columns (always baked into JSON on save)
-  "computed_columns": {
-    "total_hp": {
-      "formula": "hp * level * 10"
-    }
-  },
+  // Cell formulas (row-index aligned; values are formula strings without '=')
+  "cell_formulas": [
+    { "total_hp": "hp * level * 10" },
+    {}
+  ],
 
   // Sidecar-only comments
   "comment_columns": ["note"],
@@ -156,11 +155,11 @@ JSON-based metadata file containing:
     "total_hp": "SUM"
   },
 
-  // Column styles
-  "styles": {
-    "hp": { "color": "#ff4444" },
-    "name": { "background": "#f0f0f0" }
-  }
+  // Cell styles (row-index aligned)
+  "cell_styles": [
+    { "hp": { "color": "#ff4444" } },
+    { "name": { "background": "#f0f0f0" } }
+  ]
 }
 ```
 
@@ -172,10 +171,10 @@ JSON-based metadata file containing:
 
 ### Computed Columns
 
-- Formula-based columns derived from other columns (column-to-column rules)
-- Examples: `damage = base_attack * weapon_multiplier`, `display_name = name + " Lv." + level`
-- Computed columns are always baked into JSON on save
-- Excel-like editing flow: typing `=` in a cell enters formula mode for that column
+- Formula-based cells derived from other columns in the same row
+- Examples: `=base_attack * weapon_multiplier`, `=name + " Lv." + level`
+- Formulas are cell-level and always baked into JSON on save
+- UX: right-click a cell and edit formula in context menu, or type `=` in cell edit mode
 
 ### Summary Statistics
 
@@ -186,8 +185,8 @@ JSON-based metadata file containing:
 
 ### Styles
 
-- Per-column visual customization (text color, background color)
-- Configured directly below column headers (type/summary/comment/color controls)
+- Per-cell visual customization (text color, background color)
+- UX: right-click a cell and use context menu color controls
 - Display-only, never affects JSON output
 
 ### Comment Columns

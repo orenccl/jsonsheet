@@ -36,9 +36,11 @@ fn test_type_constraint_coerces_valid_input() {
 }
 
 #[test]
-fn test_computed_column_display_and_export_baked_by_default() {
+fn test_cell_formula_display_and_export_baked_by_default() {
     let mut state = sample_state();
-    assert!(state.set_computed_column("age2", "age * 2".to_string()));
+    assert!(state.add_column("age2"));
+    assert!(state.set_cell_formula(0, "age2", "=age * 2".to_string()));
+    assert!(state.set_cell_formula(1, "age2", "=age * 2".to_string()));
 
     assert_eq!(state.cell_display_value(0, "age2"), "60");
     assert_eq!(state.cell_display_value(1, "age2"), "50");
@@ -49,9 +51,11 @@ fn test_computed_column_display_and_export_baked_by_default() {
 }
 
 #[test]
-fn test_summary_values_for_base_and_computed_columns() {
+fn test_summary_values_for_base_and_formula_columns() {
     let mut state = sample_state();
-    assert!(state.set_computed_column("age2", "age * 2".to_string()));
+    assert!(state.add_column("age2"));
+    assert!(state.set_cell_formula(0, "age2", "=age * 2".to_string()));
+    assert!(state.set_cell_formula(1, "age2", "=age * 2".to_string()));
     state.set_summary_kind("age", Some(SummaryKind::Avg));
     state.set_summary_kind("age2", Some(SummaryKind::Sum));
 
@@ -66,19 +70,20 @@ fn test_summary_values_for_base_and_computed_columns() {
 }
 
 #[test]
-fn test_style_inline_output() {
+fn test_cell_style_inline_output() {
     let mut state = sample_state();
-    state.set_column_style(
+    state.set_cell_style(
+        0,
         "age",
         Some("#aa0000".to_string()),
         Some("#f0f0f0".to_string()),
     );
 
-    let style = state.column_style("age").unwrap_or_default();
+    let style = state.cell_style(0, "age").unwrap_or_default();
     assert_eq!(style.color.as_deref(), Some("#aa0000"));
     assert_eq!(style.background.as_deref(), Some("#f0f0f0"));
 
-    let inline = state.column_inline_style("age");
+    let inline = state.cell_inline_style(0, "age");
     assert!(inline.contains("color: #aa0000;"));
     assert!(inline.contains("background-color: #f0f0f0;"));
 }
@@ -111,20 +116,46 @@ fn test_comment_rows_are_captured_for_sidecar_save() {
 }
 
 #[test]
-fn test_set_computed_column_accepts_excel_style_formula_input() {
+fn test_set_cell_formula_accepts_excel_style_formula_input() {
     let mut state = sample_state();
-    assert!(state.set_computed_column("age2", "=age * 2".to_string()));
+    assert!(state.add_column("age2"));
+    assert!(state.set_cell_formula(0, "age2", "=age * 2".to_string()));
     assert_eq!(state.cell_display_value(0, "age2"), "60");
 }
 
 #[test]
-fn test_computed_formula_takes_priority_over_existing_json_value() {
+fn test_cell_formula_takes_priority_over_existing_json_value() {
     let mut state = sample_state();
     assert!(state.add_column("age2"));
     assert!(state.set_cell_from_input(0, "age2", "1"));
-    assert!(state.set_computed_column("age2", "=age * 2".to_string()));
+    assert!(state.set_cell_formula(0, "age2", "=age * 2".to_string()));
 
     assert_eq!(state.cell_display_value(0, "age2"), "60");
     let exported = state.export_json_data().unwrap();
     assert_eq!(exported[0]["age2"], Value::Number(60.into()));
+}
+
+#[test]
+fn test_sort_keeps_row_bound_formula_metadata() {
+    let mut state = sample_state();
+    assert!(state.add_column("score"));
+    assert!(state.set_cell_formula(0, "score", "=age + 100".to_string()));
+    assert!(state.set_cell_formula(1, "score", "=age + 200".to_string()));
+
+    assert!(state.sort_by_column_toggle("age"));
+
+    assert_eq!(state.cell_display_value(0, "name"), "Bob");
+    assert_eq!(state.cell_display_value(0, "score"), "225");
+    assert_eq!(state.cell_display_value(1, "name"), "Alice");
+    assert_eq!(state.cell_display_value(1, "score"), "130");
+}
+
+#[test]
+fn test_fixture_sidecar_cell_formula_is_loaded() {
+    let path = std::path::Path::new("tests/data/types.json");
+    let (rows, meta) = jsonsheet::io::jsheet_io::load_json_and_sidecar(path).unwrap();
+    let state = TableState::from_data_and_jsheet(rows, meta);
+
+    assert_eq!(state.cell_display_value(0, "age2"), "60");
+    assert_eq!(state.cell_display_value(1, "age2"), "50");
 }
