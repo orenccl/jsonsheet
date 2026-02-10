@@ -23,5 +23,9 @@
   "error.column_name_required": "欄位名稱為必填。",
   "error.column_exists": "欄位已存在。",
   "error.delete_column_failed": "刪除欄位失敗。",
-  "error.select_column_to_delete": "請先選取要刪除的欄位。"
+  "error.select_column_to_delete": "請先選取要刪除的欄位。",
+  "table.ctx_cond_format": "條件格式",
+  "table.ctx_cond_rule_placeholder": "例如 < 100",
+  "table.ctx_add_cond_format": "新增規則",
+  "table.ctx_remove_cond_format": "移除"
 }

@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use serde_json::{Number, Value};
 
 use crate::state::data_model::{self, Row, TableData};
-use crate::state::jsheet::{ColumnStyle, ColumnType, JSheetMeta, SummaryKind};
+use crate::state::jsheet::{ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, SummaryKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SortOrder {
@@ -120,6 +120,18 @@ impl TableState {
         self.jsheet_meta.set_column_order(order);
     }
 
+    pub fn conditional_formats(&self) -> &[ConditionalFormat] {
+        &self.jsheet_meta.conditional_formats
+    }
+
+    pub fn add_conditional_format(&mut self, format: ConditionalFormat) {
+        self.jsheet_meta.add_conditional_format(format);
+    }
+
+    pub fn remove_conditional_format(&mut self, index: usize) -> bool {
+        self.jsheet_meta.remove_conditional_format(index)
+    }
+
     pub fn column_type(&self, column: &str) -> Option<ColumnType> {
         self.jsheet_meta.column_type(column)
     }
@@ -208,7 +220,11 @@ impl TableState {
     }
 
     pub fn cell_inline_style(&self, row_index: usize, column: &str) -> String {
-        self.jsheet_meta.cell_style_inline(row_index, column)
+        if let Some(row) = self.data.get(row_index) {
+            self.jsheet_meta.cell_style_inline(row, row_index, column)
+        } else {
+            String::new()
+        }
     }
 
     pub fn export_json_data(&self) -> Result<TableData, String> {

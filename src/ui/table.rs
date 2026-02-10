@@ -7,7 +7,9 @@ use dioxus::prelude::{Key, *};
 use crate::io::jsheet_io;
 use crate::state::data_model::{self, Row};
 use crate::state::i18n::{self, Language};
-use crate::state::jsheet::{ColumnType, JSheetMeta, SummaryKind};
+use crate::state::jsheet::{
+    ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, ParsedCondRule, SummaryKind,
+};
 use crate::state::table_state::{SortOrder, TableState};
 
 #[derive(Clone, PartialEq)]
@@ -80,6 +82,8 @@ pub fn Table(
     let context_formula = use_signal(String::new);
     let context_text_color = use_signal(|| "#1a1a1a".to_string());
     let context_bg_color = use_signal(|| "#ffffff".to_string());
+    let context_cond_rule = use_signal(String::new);
+    let context_cond_color = use_signal(|| "#ff0000".to_string());
     let selected_range = use_signal::<Option<CellRange>>(|| None);
     let mut drag_selecting = use_signal(|| false);
     let drag_moved = use_signal(|| false);
@@ -221,6 +225,8 @@ pub fn Table(
                     context_formula,
                     context_text_color,
                     context_bg_color,
+                    context_cond_rule,
+                    context_cond_color,
                     row_index: menu.row,
                     column: menu.column,
                     selected_range,
@@ -347,6 +353,8 @@ fn CellContextMenu(
     context_formula: Signal<String>,
     context_text_color: Signal<String>,
     context_bg_color: Signal<String>,
+    context_cond_rule: Signal<String>,
+    context_cond_color: Signal<String>,
     row_index: usize,
     column: String,
     selected_range: Signal<Option<CellRange>>,
@@ -549,6 +557,105 @@ fn CellContextMenu(
                         }
                     },
                     "{clear_style_label}"
+                }
+            }
+
+            // Conditional formatting section
+            {
+                let cond_format_label = i18n::tr(current_language, "table.ctx_cond_format");
+                let cond_rule_placeholder = i18n::tr(current_language, "table.ctx_cond_rule_placeholder");
+                let add_cond_label = i18n::tr(current_language, "table.ctx_add_cond_format");
+                let remove_cond_label = i18n::tr(current_language, "table.ctx_remove_cond_format");
+
+                let snapshot = data.read();
+                let existing_rules: Vec<(usize, ConditionalFormat)> = snapshot
+                    .conditional_formats()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cf)| cf.column == column)
+                    .map(|(i, cf)| (i, cf.clone()))
+                    .collect();
+                drop(snapshot);
+
+                rsx! {
+                    label { class: "ctx-label", "{cond_format_label} ({column})" }
+                    for (global_idx, cf) in existing_rules.iter() {
+                        div { class: "ctx-row ctx-cond-rule",
+                            span { class: "ctx-cond-text",
+                                "{cf.rule}"
+                                if cf.style.color.is_some() || cf.style.background.is_some() {
+                                    " → "
+                                    if let Some(ref c) = cf.style.color {
+                                        span { style: "color:{c}", "■" }
+                                    }
+                                    if let Some(ref bg) = cf.style.background {
+                                        span { style: "background:{bg}", "  " }
+                                    }
+                                }
+                            }
+                            button {
+                                class: "meta-btn meta-btn-sm",
+                                onclick: {
+                                    let idx = *global_idx;
+                                    move |_| {
+                                        let removed = data.with_mut(|state| state.remove_conditional_format(idx));
+                                        if removed {
+                                            persist_sidecar_if_possible(data, file_path, error_message);
+                                        }
+                                    }
+                                },
+                                "{remove_cond_label}"
+                            }
+                        }
+                    }
+                    div { class: "ctx-row",
+                        input {
+                            class: "ctx-input ctx-input-sm",
+                            id: "context-cond-rule",
+                            placeholder: "{cond_rule_placeholder}",
+                            value: "{context_cond_rule.read()}",
+                            oninput: move |evt| {
+                                context_cond_rule.set(evt.value());
+                            }
+                        }
+                        input {
+                            class: "meta-color-input",
+                            id: "context-cond-color",
+                            r#type: "color",
+                            value: "{context_cond_color.read()}",
+                            oninput: move |evt: Event<FormData>| {
+                                context_cond_color.set(evt.value());
+                            }
+                        }
+                        button {
+                            class: "meta-btn",
+                            id: "btn-context-add-cond-format",
+                            onclick: {
+                                let col = column.clone();
+                                move |_| {
+                                    let rule_text = context_cond_rule.read().clone();
+                                    if ParsedCondRule::parse(&rule_text).is_none() {
+                                        error_message.set(Some("Invalid rule syntax. Use operators like < 100, >= 50, == legendary, != 0".to_string()));
+                                        return;
+                                    }
+                                    let color_val = context_cond_color.read().clone();
+                                    data.with_mut(|state| {
+                                        state.add_conditional_format(ConditionalFormat {
+                                            column: col.clone(),
+                                            rule: rule_text,
+                                            style: ColumnStyle {
+                                                color: Some(color_val),
+                                                background: None,
+                                            },
+                                        });
+                                    });
+                                    context_cond_rule.set(String::new());
+                                    persist_sidecar_if_possible(data, file_path, error_message);
+                                }
+                            },
+                            "{add_cond_label}"
+                        }
+                    }
                 }
             }
 
