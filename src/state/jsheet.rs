@@ -24,6 +24,8 @@ pub struct JSheetMeta {
     pub cell_formulas: Vec<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cell_styles: Vec<BTreeMap<String, ColumnStyle>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_formats: Vec<ConditionalFormat>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +59,92 @@ pub struct ColumnStyle {
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConditionalFormat {
+    pub column: String,
+    pub rule: String,
+    pub style: ColumnStyle,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CondOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedCondRule {
+    pub op: CondOp,
+    pub operand: String,
+}
+
+impl ParsedCondRule {
+    pub fn parse(rule: &str) -> Option<Self> {
+        let rule = rule.trim();
+        let (op, rest) = if let Some(r) = rule.strip_prefix("<=") {
+            (CondOp::Le, r)
+        } else if let Some(r) = rule.strip_prefix(">=") {
+            (CondOp::Ge, r)
+        } else if let Some(r) = rule.strip_prefix("!=") {
+            (CondOp::Ne, r)
+        } else if let Some(r) = rule.strip_prefix("==") {
+            (CondOp::Eq, r)
+        } else if let Some(r) = rule.strip_prefix('<') {
+            (CondOp::Lt, r)
+        } else if let Some(r) = rule.strip_prefix('>') {
+            (CondOp::Gt, r)
+        } else {
+            return None;
+        };
+        let operand = rest.trim().to_string();
+        if operand.is_empty() {
+            return None;
+        }
+        Some(Self { op, operand })
+    }
+
+    pub fn matches(&self, value: &Value) -> bool {
+        // Try numeric comparison first
+        if let Some(val_f) = value_as_f64_ref(value) {
+            if let Ok(op_f) = self.operand.parse::<f64>() {
+                return match self.op {
+                    CondOp::Lt => val_f < op_f,
+                    CondOp::Le => val_f <= op_f,
+                    CondOp::Gt => val_f > op_f,
+                    CondOp::Ge => val_f >= op_f,
+                    CondOp::Eq => (val_f - op_f).abs() < f64::EPSILON,
+                    CondOp::Ne => (val_f - op_f).abs() >= f64::EPSILON,
+                };
+            }
+        }
+
+        // Fall back to string comparison
+        let val_str = data_model::display_value(value).to_ascii_lowercase();
+        let op_str = self.operand.to_ascii_lowercase();
+        match self.op {
+            CondOp::Eq => val_str == op_str,
+            CondOp::Ne => val_str != op_str,
+            CondOp::Lt => val_str < op_str,
+            CondOp::Le => val_str <= op_str,
+            CondOp::Gt => val_str > op_str,
+            CondOp::Ge => val_str >= op_str,
+        }
+    }
+}
+
+fn value_as_f64_ref(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    }
 }
 
 impl JSheetMeta {
@@ -251,23 +339,67 @@ impl JSheetMeta {
         }
     }
 
-    pub fn cell_style_inline(&self, row_index: usize, column: &str) -> String {
-        let Some(style) = self.cell_style(row_index, column) else {
-            return String::new();
-        };
+    pub fn cell_style_inline(&self, row: &Row, row_index: usize, column: &str) -> String {
+        // Start with conditional format style (first matching rule wins)
+        let mut color: Option<&str> = None;
+        let mut background: Option<&str> = None;
+
+        if let Some(value) = self.value_for_cell(row, row_index, column) {
+            for cf in &self.conditional_formats {
+                if cf.column != column {
+                    continue;
+                }
+                if let Some(parsed) = ParsedCondRule::parse(&cf.rule) {
+                    if parsed.matches(&value) {
+                        if color.is_none() {
+                            color = cf.style.color.as_deref();
+                        }
+                        if background.is_none() {
+                            background = cf.style.background.as_deref();
+                        }
+                        if color.is_some() && background.is_some() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Cell-level style overrides conditional format
+        if let Some(style) = self.cell_style(row_index, column) {
+            if style.color.is_some() {
+                color = style.color.as_deref();
+            }
+            if style.background.is_some() {
+                background = style.background.as_deref();
+            }
+        }
 
         let mut out = String::new();
-        if let Some(color) = style.color.as_deref() {
+        if let Some(c) = color {
             out.push_str("color: ");
-            out.push_str(color);
+            out.push_str(c);
             out.push(';');
         }
-        if let Some(background) = style.background.as_deref() {
+        if let Some(bg) = background {
             out.push_str("background-color: ");
-            out.push_str(background);
+            out.push_str(bg);
             out.push(';');
         }
         out
+    }
+
+    pub fn add_conditional_format(&mut self, format: ConditionalFormat) {
+        self.conditional_formats.push(format);
+    }
+
+    pub fn remove_conditional_format(&mut self, index: usize) -> bool {
+        if index < self.conditional_formats.len() {
+            self.conditional_formats.remove(index);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_comment_column(&self, column: &str) -> bool {
@@ -356,6 +488,7 @@ impl JSheetMeta {
         for row in &mut self.cell_styles {
             row.remove(column);
         }
+        self.conditional_formats.retain(|cf| cf.column != column);
     }
 
     pub fn validate_formula(formula: &str) -> bool {

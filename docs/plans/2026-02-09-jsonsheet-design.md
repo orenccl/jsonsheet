@@ -197,7 +197,7 @@ ParkourItemData.json.jsheet   -- Auto-paired metadata (optional)
 
 - [x] Per-cell styles (text color, background color) via right-click context menu
 - [x] Batch style: apply/clear for selected range
-- [ ] Conditional formatting rules (e.g. `hp < 100` -> red text)
+- [x] Conditional formatting rules (e.g. `hp < 100` -> red text)
 - [x] Comment columns -- editable in table, stored in `.jsheet` only, excluded from JSON export
 - [x] Styles are display-only, never affect JSON output
 
