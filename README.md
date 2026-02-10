@@ -28,6 +28,20 @@ A desktop application that provides a spreadsheet-like interface for editing JSO
 ./scripts/setup.sh
 ```
 
+## UI E2E (optional)
+
+UI E2E tests are ignored by default. Use the helper scripts to run them:
+
+**Windows:**
+```powershell
+.\scripts\run-ui-e2e.ps1
+```
+
+**Linux / macOS:**
+```bash
+./scripts/run-ui-e2e.sh
+```
+
 ## Usage
 
 ```bash

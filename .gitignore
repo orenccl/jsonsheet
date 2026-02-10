@@ -1,1 +1,3 @@
 /target
+node_modules
+tests/ui_e2e/.playwright
