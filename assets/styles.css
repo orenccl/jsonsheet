@@ -1,4 +1,4 @@
-* {
+﻿* {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
@@ -126,13 +126,117 @@ th.selected-col {
 }
 
 th.sorted-asc::after {
-    content: " ↑";
+    content: " ^";
     color: #3a6ad6;
 }
 
 th.sorted-desc::after {
-    content: " ↓";
+    content: " v";
     color: #3a6ad6;
+}
+
+.column-meta-row th {
+    background: #f3f7ff;
+    border-top: 0;
+    padding: 6px;
+    vertical-align: top;
+}
+
+.column-meta-cell {
+    min-width: 240px;
+}
+
+.meta-label {
+    font-size: 11px;
+    color: #8290a8;
+}
+
+.meta-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    align-items: center;
+}
+
+.meta-select {
+    width: 100%;
+    border: 1px solid #c8d3ea;
+    border-radius: 4px;
+    background: #fff;
+    padding: 4px 6px;
+    font-size: 11px;
+}
+
+.meta-check-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #5d6880;
+}
+
+.meta-color-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.meta-color-label {
+    font-size: 11px;
+    color: #5d6880;
+    min-width: 16px;
+}
+
+.meta-color-input {
+    width: 30px;
+    height: 22px;
+    border: 1px solid #c8d3ea;
+    border-radius: 4px;
+    background: #fff;
+    padding: 0;
+    cursor: pointer;
+}
+
+.meta-btn {
+    border: 1px solid #c8d3ea;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #42506a;
+    font-size: 11px;
+    padding: 4px 6px;
+    cursor: pointer;
+}
+
+.meta-btn:hover {
+    background: #edf3ff;
+}
+
+.meta-formula {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #365aa8;
+    font-family: "Consolas", "Courier New", monospace;
+}
+
+.meta-open-formula-help {
+    margin-top: 4px;
+    font-size: 10px;
+    color: #6e7a90;
+}
+
+.meta-focus-btn {
+    margin-top: 6px;
+    border: 1px dashed #b7c6e5;
+    border-radius: 4px;
+    background: transparent;
+    color: #4b5e84;
+    font-size: 11px;
+    padding: 2px 6px;
+    cursor: pointer;
+}
+
+.meta-focus-btn:hover {
+    background: #edf3ff;
 }
 
 td {
@@ -191,6 +295,13 @@ tr:hover td.cell.search-match {
     background: #ffffff;
 }
 
+.formula-input {
+    border-color: #4f7ed7;
+    box-shadow: 0 0 0 1px #b5cbf3;
+    background: #eef4ff;
+    font-family: "Consolas", "Courier New", monospace;
+}
+
 .editing-cell {
     padding: 4px 6px;
 }
@@ -203,3 +314,4 @@ tfoot .summary-row td {
 .summary-label {
     color: #4f5f7a;
 }
+

@@ -38,6 +38,10 @@
   "toolbar.option.summary_count": "COUNT",
   "toolbar.option.summary_min": "MIN",
   "toolbar.option.summary_max": "MAX",
+  "table.meta_comment": "Comment",
+  "table.meta_style_reset": "Reset Style",
+  "table.meta_formula_hint": "Edit a cell with '=' to set formula",
+  "table.meta_focus": "Select",
   "dialog.json_filter": "JSON",
   "error.delete_row_failed": "Failed to delete row.",
   "error.select_row_to_delete": "Select a row to delete.",
@@ -46,5 +50,6 @@
   "error.delete_column_failed": "Failed to delete column.",
   "error.select_column_to_delete": "Select a column to delete.",
   "error.invalid_computed_formula": "Invalid computed formula.",
+  "error.invalid_value_for_column_type": "Value does not match the column type.",
   "test.fallback_only": "Fallback value"
 }

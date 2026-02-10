@@ -47,7 +47,7 @@ pub fn App() -> Element {
         document::Style { "{STYLESHEET}" }
         div { class: "app",
             Toolbar { data, language, file_path, error_message, selected_row, selected_column }
-            Table { data, language, selected_row, selected_column }
+            Table { data, language, file_path, error_message, selected_row, selected_column }
         }
     }
 }

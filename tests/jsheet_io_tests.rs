@@ -41,7 +41,9 @@ fn test_load_json_and_sidecar_with_sidecar() {
         &sidecar,
         r#"{
           "columns": { "age": { "type": "number" } },
-          "computed_columns": { "age2": { "formula": "age * 2", "bake": false } }
+          "computed_columns": { "age2": { "formula": "age * 2" } },
+          "comment_columns": ["note"],
+          "comment_rows": [{ "note": "internal" }]
         }"#,
     )
     .unwrap();
@@ -56,6 +58,11 @@ fn test_load_json_and_sidecar_with_sidecar() {
         meta.computed_columns.get("age2").unwrap().formula,
         "age * 2".to_string()
     );
+    assert!(meta.comment_columns.contains("note"));
+    assert_eq!(
+        meta.comment_rows[0]["note"],
+        Value::String("internal".to_string())
+    );
 }
 
 #[test]
@@ -65,7 +72,7 @@ fn test_save_sidecar_for_json_roundtrip() {
     jsonsheet::io::json_io::save_json(&json_path, &sample_rows()).unwrap();
 
     let mut meta = JSheetMeta::default();
-    meta.set_computed_column("age2".to_string(), "age * 2".to_string(), false);
+    meta.set_computed_column("age2".to_string(), "age * 2".to_string());
     jsheet_io::save_sidecar_for_json(&json_path, &meta).unwrap();
 
     let loaded = jsheet_io::load_sidecar_for_json(&json_path).unwrap();

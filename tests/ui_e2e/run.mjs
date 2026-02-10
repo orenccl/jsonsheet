@@ -223,6 +223,21 @@ async function main() {
     await assertCellContains(page, 0, "age2", "60");
     await assertSummaryContains(page, "age", "27.5");
     await assertSummaryContains(page, "age2", "110");
+
+    // Excel-like formula edit mode: typing '=' updates computed formula.
+    await page.click("#cell-0-age2");
+    await page.fill("#cell-input-0-age2", "=age * 3");
+    await page.waitForSelector("#cell-input-0-age2.formula-input", { timeout: 5000 });
+    await page.keyboard.press("Enter");
+    await assertCellContains(page, 0, "age2", "90");
+    await assertSummaryContains(page, "age2", "165");
+
+    // Comment column toggle should be available in header controls.
+    await page.fill("#input-new-column", "note");
+    await page.click("#btn-add-column");
+    await page.waitForSelector("#col-note", { timeout: 5000 });
+    await page.click("#meta-comment-note");
+
     await page.click("#cell-0-age");
     await page.fill("#cell-input-0-age", "oops");
     await page.keyboard.press("Enter");

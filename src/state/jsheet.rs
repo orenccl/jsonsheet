@@ -13,6 +13,10 @@ pub struct JSheetMeta {
     #[serde(default)]
     pub computed_columns: BTreeMap<String, ComputedColumn>,
     #[serde(default)]
+    pub comment_columns: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_rows: Vec<Row>,
+    #[serde(default)]
     pub summaries: BTreeMap<String, SummaryKind>,
     #[serde(default)]
     pub styles: BTreeMap<String, ColumnStyle>,
@@ -36,8 +40,6 @@ pub struct ColumnConstraint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComputedColumn {
     pub formula: String,
-    #[serde(default)]
-    pub bake: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +63,11 @@ pub struct ColumnStyle {
 impl JSheetMeta {
     pub fn display_columns(&self, data: &TableData) -> Vec<String> {
         let mut all: BTreeSet<String> = data_model::derive_columns(data).into_iter().collect();
+        all.extend(self.columns.keys().cloned());
         all.extend(self.computed_columns.keys().cloned());
+        all.extend(self.comment_columns.iter().cloned());
+        all.extend(self.summaries.keys().cloned());
+        all.extend(self.styles.keys().cloned());
         all.into_iter().collect()
     }
 
@@ -89,13 +95,73 @@ impl JSheetMeta {
         self.computed_columns.get(column)
     }
 
-    pub fn set_computed_column(&mut self, column: String, formula: String, bake: bool) {
+    pub fn set_computed_column(&mut self, column: String, formula: String) {
+        let formula =
+            Self::normalize_formula(&formula).unwrap_or_else(|| formula.trim().to_string());
         self.computed_columns
-            .insert(column, ComputedColumn { formula, bake });
+            .insert(column, ComputedColumn { formula });
     }
 
     pub fn remove_computed_column(&mut self, column: &str) {
         self.computed_columns.remove(column);
+    }
+
+    pub fn is_comment_column(&self, column: &str) -> bool {
+        self.comment_columns.contains(column)
+    }
+
+    pub fn set_comment_column(&mut self, column: &str, is_comment: bool) {
+        if is_comment {
+            self.comment_columns.insert(column.to_string());
+        } else {
+            self.comment_columns.remove(column);
+            for row in &mut self.comment_rows {
+                row.remove(column);
+            }
+        }
+    }
+
+    pub fn apply_comment_rows(&self, data: &mut TableData) {
+        if self.comment_columns.is_empty() {
+            return;
+        }
+
+        for (idx, row) in data.iter_mut().enumerate() {
+            if let Some(comment_row) = self.comment_rows.get(idx) {
+                for column in &self.comment_columns {
+                    if let Some(value) = comment_row.get(column) {
+                        row.insert(column.clone(), value.clone());
+                    } else {
+                        row.entry(column.clone()).or_insert(Value::Null);
+                    }
+                }
+            } else {
+                for column in &self.comment_columns {
+                    row.entry(column.clone()).or_insert(Value::Null);
+                }
+            }
+        }
+    }
+
+    pub fn capture_comment_rows(&mut self, data: &TableData) {
+        if self.comment_columns.is_empty() {
+            self.comment_rows.clear();
+            return;
+        }
+
+        self.comment_rows = data
+            .iter()
+            .map(|row| {
+                self.comment_columns
+                    .iter()
+                    .filter_map(|column| {
+                        row.get(column)
+                            .cloned()
+                            .map(|value| (column.clone(), value))
+                    })
+                    .collect()
+            })
+            .collect();
     }
 
     pub fn summary_kind(&self, column: &str) -> Option<SummaryKind> {
@@ -132,6 +198,10 @@ impl JSheetMeta {
     pub fn remove_column_metadata(&mut self, column: &str) {
         self.columns.remove(column);
         self.computed_columns.remove(column);
+        self.comment_columns.remove(column);
+        for row in &mut self.comment_rows {
+            row.remove(column);
+        }
         self.summaries.remove(column);
         self.styles.remove(column);
     }
@@ -156,7 +226,21 @@ impl JSheetMeta {
     }
 
     pub fn validate_formula(formula: &str) -> bool {
-        Parser::new(formula).parse().is_ok()
+        let Some(normalized) = Self::normalize_formula(formula) else {
+            return false;
+        };
+        Parser::new(&normalized).parse().is_ok()
+    }
+
+    pub fn normalize_formula(raw: &str) -> Option<String> {
+        let mut formula = raw.trim();
+        if let Some(stripped) = formula.strip_prefix('=') {
+            formula = stripped.trim_start();
+        }
+        if formula.is_empty() {
+            return None;
+        }
+        Some(formula.to_string())
     }
 
     pub fn value_for_column(&self, row: &Row, column: &str) -> Option<Value> {
@@ -221,15 +305,15 @@ impl JSheetMeta {
             }
         }
 
-        for (column, computed) in &self.computed_columns {
-            if computed.bake {
-                let Some(value) = self.value_for_column(&out, column) else {
-                    return Err(format!("Failed to evaluate computed column '{column}'"));
-                };
-                out.insert(column.clone(), value);
-            } else {
-                out.remove(column);
-            }
+        for column in self.computed_columns.keys() {
+            let Some(value) = self.value_for_column(&out, column) else {
+                return Err(format!("Failed to evaluate computed column '{column}'"));
+            };
+            out.insert(column.clone(), value);
+        }
+
+        for column in &self.comment_columns {
+            out.remove(column);
         }
 
         Ok(out)
@@ -241,19 +325,18 @@ impl JSheetMeta {
         column: &str,
         stack: &mut BTreeSet<String>,
     ) -> Option<Value> {
-        if let Some(value) = row.get(column) {
-            return Some(value.clone());
+        if let Some(computed) = self.computed_column(column) {
+            if !stack.insert(column.to_string()) {
+                return None;
+            }
+
+            let parsed = Parser::new(&computed.formula).parse().ok()?;
+            let value = self.eval_expr_for_row(&parsed, row, stack);
+            stack.remove(column);
+            return Some(value);
         }
 
-        let computed = self.computed_column(column)?;
-        if !stack.insert(column.to_string()) {
-            return None;
-        }
-
-        let parsed = Parser::new(&computed.formula).parse().ok()?;
-        let value = self.eval_expr_for_row(&parsed, row, stack);
-        stack.remove(column);
-        Some(value)
+        row.get(column).cloned()
     }
 
     fn eval_expr_for_row(&self, expr: &Expr, row: &Row, stack: &mut BTreeSet<String>) -> Value {

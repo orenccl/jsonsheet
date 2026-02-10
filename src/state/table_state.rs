@@ -60,6 +60,8 @@ impl TableState {
     }
 
     pub fn replace_data_and_jsheet(&mut self, data: TableData, jsheet_meta: JSheetMeta) {
+        let mut data = data;
+        jsheet_meta.apply_comment_rows(&mut data);
         self.data = data;
         self.jsheet_meta = jsheet_meta;
         self.undo_stack.clear();
@@ -76,6 +78,12 @@ impl TableState {
 
     pub fn jsheet_meta(&self) -> &JSheetMeta {
         &self.jsheet_meta
+    }
+
+    pub fn jsheet_meta_for_save(&self) -> JSheetMeta {
+        let mut meta = self.jsheet_meta.clone();
+        meta.capture_comment_rows(&self.data);
+        meta
     }
 
     pub fn can_undo(&self) -> bool {
@@ -118,18 +126,45 @@ impl TableState {
         self.jsheet_meta.computed_column(column)
     }
 
-    pub fn set_computed_column(&mut self, column: &str, formula: String, bake: bool) -> bool {
-        let formula = formula.trim().to_string();
-        if formula.is_empty() || !JSheetMeta::validate_formula(&formula) {
+    pub fn set_computed_column(&mut self, column: &str, formula: String) -> bool {
+        let column = column.trim();
+        if column.is_empty() {
+            return false;
+        }
+        let Some(formula) = JSheetMeta::normalize_formula(&formula) else {
+            return false;
+        };
+        if !JSheetMeta::validate_formula(&formula) {
             return false;
         }
         self.jsheet_meta
-            .set_computed_column(column.trim().to_string(), formula, bake);
+            .set_computed_column(column.to_string(), formula);
         true
     }
 
     pub fn remove_computed_column(&mut self, column: &str) {
         self.jsheet_meta.remove_computed_column(column);
+    }
+
+    pub fn is_comment_column(&self, column: &str) -> bool {
+        self.jsheet_meta.is_comment_column(column)
+    }
+
+    pub fn set_comment_column(&mut self, column: &str, is_comment: bool) {
+        let trimmed = column.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        self.jsheet_meta.set_comment_column(trimmed, is_comment);
+        if is_comment {
+            if self.data.is_empty() {
+                self.data.push(Row::new());
+            }
+            for row in &mut self.data {
+                row.entry(trimmed.to_string()).or_insert(Value::Null);
+            }
+        }
     }
 
     pub fn summary_kind(&self, column: &str) -> Option<SummaryKind> {
@@ -249,6 +284,12 @@ impl TableState {
         self.push_undo_snapshot();
         self.sort_spec = None;
         data_model::add_row(&mut self.data);
+        let display_columns = self.display_columns();
+        if let Some(last_row) = self.data.last_mut() {
+            for column in display_columns {
+                last_row.entry(column).or_insert(Value::Null);
+            }
+        }
         true
     }
 

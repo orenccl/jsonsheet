@@ -6,10 +6,20 @@
   },
   "computed_columns": {
     "age2": {
-      "formula": "age * 2",
-      "bake": false
+      "formula": "age * 3"
     }
   },
+  "comment_columns": [
+    "note"
+  ],
+  "comment_rows": [
+    {
+      "note": null
+    },
+    {
+      "note": null
+    }
+  ],
   "summaries": {
     "age": "AVG",
     "age2": "SUM"
