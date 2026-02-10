@@ -155,6 +155,30 @@ async function assertSearchHighlightStyle(page, rowIndex, column, timeout = 5000
   }
 }
 
+async function assertElementText(page, selector, expected, timeout = 5000) {
+  await page.waitForFunction(
+    ({ selector: s, expectedText }) => {
+      const el = document.querySelector(s);
+      if (!el) return false;
+      return (el.textContent || "").trim() === expectedText;
+    },
+    { selector, expectedText: expected },
+    { timeout }
+  );
+}
+
+async function assertInputPlaceholder(page, selector, expected, timeout = 5000) {
+  await page.waitForFunction(
+    ({ selector: s, expectedText }) => {
+      const el = document.querySelector(s);
+      if (!(el instanceof HTMLInputElement)) return false;
+      return el.placeholder === expectedText;
+    },
+    { selector, expectedText: expected },
+    { timeout }
+  );
+}
+
 async function main() {
   runOrThrow("cargo", ["build", "--quiet"], { cwd: root });
 
@@ -180,6 +204,15 @@ async function main() {
 
     await page.waitForSelector("#table-container", { timeout: 15000 });
     await waitForRowCount(page, 2, 10000);
+
+    // Phase 4: i18n language switch.
+    await assertElementText(page, "#btn-open", "Open");
+    await assertInputPlaceholder(page, "#input-search-query", "Search all cells");
+    await page.selectOption("#select-language", "zh-Hant");
+    await assertElementText(page, "#btn-open", "開啟");
+    await assertInputPlaceholder(page, "#input-search-query", "搜尋所有儲存格");
+    await page.selectOption("#select-language", "en");
+    await assertElementText(page, "#btn-open", "Open");
 
     // Phase 2 baseline: edit cell.
     await page.click("#cell-0-name");

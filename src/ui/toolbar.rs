@@ -3,11 +3,13 @@ use std::path::PathBuf;
 
 use crate::io::json_io;
 use crate::state::data_model;
+use crate::state::i18n::{self, Language};
 use crate::state::table_state::TableState;
 
 #[component]
 pub fn Toolbar(
     data: Signal<TableState>,
+    language: Signal<Language>,
     file_path: Signal<Option<PathBuf>>,
     error_message: Signal<Option<String>>,
     selected_row: Signal<Option<usize>>,
@@ -15,24 +17,54 @@ pub fn Toolbar(
 ) -> Element {
     let mut new_column = use_signal(String::new);
     let snapshot = data.read().clone();
+    let current_language = *language.read();
     let columns = data_model::derive_columns(snapshot.data());
     let can_undo = snapshot.can_undo();
     let can_redo = snapshot.can_redo();
     let filter_column_value = snapshot.filter_column().unwrap_or("").to_string();
     let filter_query_value = snapshot.filter_query().to_string();
     let search_query_value = snapshot.search_query().to_string();
+    let language_label = i18n::tr(current_language, "toolbar.language_label");
+    let open_label = i18n::tr(current_language, "toolbar.open");
+    let save_label = i18n::tr(current_language, "toolbar.save");
+    let undo_label = i18n::tr(current_language, "toolbar.undo");
+    let redo_label = i18n::tr(current_language, "toolbar.redo");
+    let add_row_label = i18n::tr(current_language, "toolbar.add_row");
+    let delete_row_label = i18n::tr(current_language, "toolbar.delete_row");
+    let filter_column_placeholder = i18n::tr(current_language, "toolbar.filter_column_placeholder");
+    let filter_value_placeholder = i18n::tr(current_language, "toolbar.filter_value_placeholder");
+    let clear_filter_label = i18n::tr(current_language, "toolbar.clear_filter");
+    let search_placeholder = i18n::tr(current_language, "toolbar.search_placeholder");
+    let new_column_placeholder = i18n::tr(current_language, "toolbar.new_column_placeholder");
+    let add_column_label = i18n::tr(current_language, "toolbar.add_column");
+    let delete_column_label = i18n::tr(current_language, "toolbar.delete_column");
 
     rsx! {
         div { class: "toolbar",
+            span { class: "toolbar-label", "{language_label}" }
+            select {
+                class: "toolbar-select",
+                id: "select-language",
+                value: "{current_language.code()}",
+                onchange: move |evt| {
+                    if let Some(next_language) = Language::from_code(&evt.value()) {
+                        language.set(next_language);
+                    }
+                },
+                for lang in Language::all().iter().copied() {
+                    option { value: "{lang.code()}", "{i18n::tr(current_language, lang.label_key())}" }
+                }
+            }
             button {
                 class: "toolbar-btn",
                 id: "btn-open",
                 onclick: move |_| {
                     spawn(async move {
-                        open_file(data, file_path, error_message, selected_row, selected_column).await;
+                        open_file(data, language, file_path, error_message, selected_row, selected_column)
+                            .await;
                     });
                 },
-                "Open"
+                "{open_label}"
             }
             button {
                 class: "toolbar-btn",
@@ -41,7 +73,7 @@ pub fn Toolbar(
                 onclick: move |_| {
                     save_file(data, file_path, error_message);
                 },
-                "Save"
+                "{save_label}"
             }
             button {
                 class: "toolbar-btn",
@@ -55,7 +87,7 @@ pub fn Toolbar(
                         error_message.set(None);
                     }
                 },
-                "Undo"
+                "{undo_label}"
             }
             button {
                 class: "toolbar-btn",
@@ -69,7 +101,7 @@ pub fn Toolbar(
                         error_message.set(None);
                     }
                 },
-                "Redo"
+                "{redo_label}"
             }
             button {
                 class: "toolbar-btn",
@@ -86,7 +118,7 @@ pub fn Toolbar(
                     }
                     error_message.set(None);
                 },
-                "Add Row"
+                "{add_row_label}"
             }
             button {
                 class: "toolbar-btn",
@@ -100,13 +132,17 @@ pub fn Toolbar(
                             selected_row.set(None);
                             error_message.set(None);
                         } else {
-                            error_message.set(Some("Failed to delete row.".to_string()));
+                            error_message.set(Some(
+                                i18n::tr(*language.read(), "error.delete_row_failed").to_string(),
+                            ));
                         }
                     } else {
-                        error_message.set(Some("Select a row to delete.".to_string()));
+                        error_message.set(Some(
+                            i18n::tr(*language.read(), "error.select_row_to_delete").to_string(),
+                        ));
                     }
                 },
-                "Delete Row"
+                "{delete_row_label}"
             }
             select {
                 class: "toolbar-select",
@@ -120,7 +156,7 @@ pub fn Toolbar(
                         state.set_filter(col, query);
                     });
                 },
-                option { value: "", "Filter column..." }
+                option { value: "", "{filter_column_placeholder}" }
                 for col in &columns {
                     option { value: "{col}", "{col}" }
                 }
@@ -128,7 +164,7 @@ pub fn Toolbar(
             input {
                 class: "toolbar-input",
                 id: "input-filter-query",
-                placeholder: "Filter value",
+                placeholder: "{filter_value_placeholder}",
                 value: "{filter_query_value}",
                 oninput: move |evt| {
                     let query = evt.value();
@@ -146,12 +182,12 @@ pub fn Toolbar(
                         state.clear_filter();
                     });
                 },
-                "Clear Filter"
+                "{clear_filter_label}"
             }
             input {
                 class: "toolbar-input",
                 id: "input-search-query",
-                placeholder: "Search all cells",
+                placeholder: "{search_placeholder}",
                 value: "{search_query_value}",
                 oninput: move |evt| {
                     let query = evt.value();
@@ -163,7 +199,7 @@ pub fn Toolbar(
             input {
                 class: "toolbar-input",
                 id: "input-new-column",
-                placeholder: "New column",
+                placeholder: "{new_column_placeholder}",
                 value: "{new_column.read()}",
                 oninput: move |evt| {
                     new_column.set(evt.value());
@@ -175,7 +211,9 @@ pub fn Toolbar(
                 onclick: move |_| {
                     let name = new_column.read().trim().to_string();
                     if name.is_empty() {
-                        error_message.set(Some("Column name is required.".to_string()));
+                        error_message.set(Some(
+                            i18n::tr(*language.read(), "error.column_name_required").to_string(),
+                        ));
                         return;
                     }
 
@@ -185,10 +223,11 @@ pub fn Toolbar(
                         new_column.set(String::new());
                         error_message.set(None);
                     } else {
-                        error_message.set(Some("Column already exists.".to_string()));
+                        error_message
+                            .set(Some(i18n::tr(*language.read(), "error.column_exists").to_string()));
                     }
                 },
-                "Add Column"
+                "{add_column_label}"
             }
             button {
                 class: "toolbar-btn",
@@ -202,13 +241,17 @@ pub fn Toolbar(
                             selected_column.set(None);
                             error_message.set(None);
                         } else {
-                            error_message.set(Some("Failed to delete column.".to_string()));
+                            error_message.set(Some(
+                                i18n::tr(*language.read(), "error.delete_column_failed").to_string(),
+                            ));
                         }
                     } else {
-                        error_message.set(Some("Select a column to delete.".to_string()));
+                        error_message.set(Some(
+                            i18n::tr(*language.read(), "error.select_column_to_delete").to_string(),
+                        ));
                     }
                 },
-                "Delete Column"
+                "{delete_column_label}"
             }
             if let Some(path) = file_path.read().as_ref() {
                 span { class: "file-path", "{path.display()}" }
@@ -222,13 +265,14 @@ pub fn Toolbar(
 
 async fn open_file(
     mut data: Signal<TableState>,
+    language: Signal<Language>,
     mut file_path: Signal<Option<PathBuf>>,
     mut error_message: Signal<Option<String>>,
     mut selected_row: Signal<Option<usize>>,
     mut selected_column: Signal<Option<String>>,
 ) {
     let task = rfd::AsyncFileDialog::new()
-        .add_filter("JSON", &["json"])
+        .add_filter(i18n::tr(*language.read(), "dialog.json_filter"), &["json"])
         .pick_file()
         .await;
 

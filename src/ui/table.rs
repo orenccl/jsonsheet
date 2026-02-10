@@ -1,6 +1,7 @@
 use dioxus::prelude::{Key, *};
 
 use crate::state::data_model::{self, Row};
+use crate::state::i18n::{self, Language};
 use crate::state::table_state::{SortOrder, TableState};
 
 #[derive(Clone, PartialEq)]
@@ -13,6 +14,7 @@ struct EditingCell {
 #[component]
 pub fn Table(
     data: Signal<TableState>,
+    language: Signal<Language>,
     selected_row: Signal<Option<usize>>,
     selected_column: Signal<Option<String>>,
 ) -> Element {
@@ -24,8 +26,9 @@ pub fn Table(
     let sort_spec = snapshot.sort_spec().cloned();
 
     if columns.is_empty() {
+        let empty_message = i18n::tr(*language.read(), "table.empty_message");
         return rsx! {
-            p { class: "empty-message", id: "empty-message", "No data loaded. Click \"Open\" to load a JSON file." }
+            p { class: "empty-message", id: "empty-message", "{empty_message}" }
         };
     }
 

@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use std::path::PathBuf;
 
 use crate::io::json_io;
+use crate::state::i18n::Language;
 use crate::state::table_state::TableState;
 use crate::ui::table::Table;
 use crate::ui::toolbar::Toolbar;
@@ -11,6 +12,7 @@ const STYLESHEET: &str = include_str!("../../assets/styles.css");
 #[component]
 pub fn App() -> Element {
     let data = use_signal(TableState::new);
+    let language = use_signal(Language::default);
     let file_path = use_signal::<Option<PathBuf>>(|| None);
     let error_message = use_signal::<Option<String>>(|| None);
     let mut selected_row = use_signal::<Option<usize>>(|| None);
@@ -44,8 +46,8 @@ pub fn App() -> Element {
     rsx! {
         document::Style { "{STYLESHEET}" }
         div { class: "app",
-            Toolbar { data, file_path, error_message, selected_row, selected_column }
-            Table { data, selected_row, selected_column }
+            Toolbar { data, language, file_path, error_message, selected_row, selected_column }
+            Table { data, language, selected_row, selected_column }
         }
     }
 }
