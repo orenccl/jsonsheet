@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use serde_json::Value;
+use serde_json::{Number, Value};
 
 use crate::state::data_model::{self, Row, TableData};
 
@@ -152,13 +152,17 @@ impl TableState {
     }
 
     pub fn delete_column(&mut self, name: &str) -> bool {
+        let trimmed = name.trim();
         let mut next = self.data.clone();
-        if !data_model::delete_column(&mut next, name) {
+        if !data_model::delete_column(&mut next, trimmed) {
             return false;
         }
 
         self.push_undo_snapshot();
         self.sort_spec = None;
+        if self.filter_column.as_deref() == Some(trimmed) {
+            self.clear_filter();
+        }
         self.data = next;
         true
     }
@@ -286,15 +290,37 @@ fn compare_value_pair(left: &Value, right: &Value) -> Ordering {
     match (left, right) {
         (Value::Null, Value::Null) => Ordering::Equal,
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-        (Value::Number(a), Value::Number(b)) => {
-            let left = a.as_f64().unwrap_or(f64::NAN);
-            let right = b.as_f64().unwrap_or(f64::NAN);
-            left.partial_cmp(&right).unwrap_or(Ordering::Equal)
-        }
+        (Value::Number(a), Value::Number(b)) => compare_numbers(a, b),
         (Value::String(a), Value::String(b)) => a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()),
         _ => type_rank(left)
             .cmp(&type_rank(right))
             .then_with(|| data_model::display_value(left).cmp(&data_model::display_value(right))),
+    }
+}
+
+fn compare_numbers(left: &Number, right: &Number) -> Ordering {
+    match (left.as_i64(), left.as_u64(), right.as_i64(), right.as_u64()) {
+        (Some(a), _, Some(b), _) => a.cmp(&b),
+        (Some(a), _, _, Some(b)) => {
+            if a < 0 {
+                Ordering::Less
+            } else {
+                (a as u64).cmp(&b)
+            }
+        }
+        (_, Some(a), Some(b), _) => {
+            if b < 0 {
+                Ordering::Greater
+            } else {
+                a.cmp(&(b as u64))
+            }
+        }
+        (_, Some(a), _, Some(b)) => a.cmp(&b),
+        _ => {
+            let left = left.as_f64().unwrap_or(f64::NAN);
+            let right = right.as_f64().unwrap_or(f64::NAN);
+            left.partial_cmp(&right).unwrap_or(Ordering::Equal)
+        }
     }
 }
 

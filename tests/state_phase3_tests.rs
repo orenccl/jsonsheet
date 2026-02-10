@@ -106,3 +106,39 @@ fn test_undo_redo_sort_restores_sort_state() {
         Some(SortOrder::Asc)
     );
 }
+
+#[test]
+fn test_sort_large_integer_values_without_precision_loss() {
+    let mut state = TableState::from_data(vec![
+        BTreeMap::from([(
+            "id".to_string(),
+            Value::Number(9_007_199_254_740_993u64.into()),
+        )]),
+        BTreeMap::from([(
+            "id".to_string(),
+            Value::Number(9_007_199_254_740_992u64.into()),
+        )]),
+    ]);
+
+    assert!(state.sort_by_column_toggle("id"));
+    assert_eq!(
+        state.data()[0]["id"],
+        Value::Number(9_007_199_254_740_992u64.into())
+    );
+    assert_eq!(
+        state.data()[1]["id"],
+        Value::Number(9_007_199_254_740_993u64.into())
+    );
+}
+
+#[test]
+fn test_delete_filtered_column_clears_filter_state() {
+    let mut state = sample_state();
+    state.set_filter(Some("name".to_string()), "bo".to_string());
+    assert_eq!(state.visible_row_indices(), vec![1]);
+
+    assert!(state.delete_column("name"));
+    assert_eq!(state.filter_column(), None);
+    assert_eq!(state.filter_query(), "");
+    assert_eq!(state.visible_row_indices(), vec![0, 1, 2]);
+}
