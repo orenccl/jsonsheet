@@ -60,6 +60,7 @@ impl TableState {
 
     pub fn replace_data_and_jsheet(&mut self, data: TableData, mut jsheet_meta: JSheetMeta) {
         let mut data = data;
+        jsheet_meta.auto_detect_row_key(&data);
         jsheet_meta.apply_comment_rows(&mut data);
         jsheet_meta.resize_row_metadata(data.len());
 
@@ -113,6 +114,10 @@ impl TableState {
 
     pub fn display_columns(&self) -> Vec<String> {
         self.jsheet_meta.display_columns(&self.data)
+    }
+
+    pub fn set_column_order(&mut self, order: Vec<String>) {
+        self.jsheet_meta.set_column_order(order);
     }
 
     pub fn column_type(&self, column: &str) -> Option<ColumnType> {
