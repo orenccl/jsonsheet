@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use jsonsheet::state::jsheet::{
-    ColumnStyle, ColumnType, ConditionalFormat, ParsedCondRule, SummaryKind,
+    ColumnStyle, ColumnType, ConditionalFormat, ParsedCondRule, SummaryKind, ValidationRule,
 };
 use jsonsheet::state::table_state::TableState;
 
@@ -291,4 +291,181 @@ fn test_conditional_format_roundtrip_via_sidecar() {
     assert_eq!(loaded.conditional_formats.len(), 1);
     assert_eq!(loaded.conditional_formats[0].column, "hp");
     assert_eq!(loaded.conditional_formats[0].rule, "< 100");
+}
+
+// ── Phase 8: Data Validation + Freeze Panes ──
+
+#[test]
+fn test_validation_min_max_blocks_out_of_range() {
+    let mut state = sample_state();
+    state.set_column_type("age", Some(ColumnType::Number));
+    state.set_validation_rule(
+        "age",
+        Some(ValidationRule {
+            min: Some(0.0),
+            max: Some(100.0),
+            ..Default::default()
+        }),
+    );
+
+    // Within range: should succeed
+    assert!(state.set_cell_from_input(0, "age", "50"));
+    assert_eq!(state.data()[0]["age"], Value::Number(50.into()));
+
+    // Below min: should fail
+    assert!(!state.set_cell_from_input(0, "age", "-1"));
+    assert_eq!(state.data()[0]["age"], Value::Number(50.into()));
+
+    // Above max: should fail
+    assert!(!state.set_cell_from_input(0, "age", "101"));
+    assert_eq!(state.data()[0]["age"], Value::Number(50.into()));
+
+    // Boundary: min and max should succeed
+    assert!(state.set_cell_from_input(0, "age", "0"));
+    assert!(state.set_cell_from_input(0, "age", "100"));
+}
+
+#[test]
+fn test_validation_enum_blocks_invalid_value() {
+    let mut state = sample_state();
+    state.set_validation_rule(
+        "name",
+        Some(ValidationRule {
+            enum_values: Some(vec![
+                "Alice".to_string(),
+                "Bob".to_string(),
+                "Charlie".to_string(),
+            ]),
+            ..Default::default()
+        }),
+    );
+
+    // Valid enum value: should succeed
+    assert!(state.set_cell_from_input(0, "name", "Charlie"));
+    assert_eq!(
+        state.data()[0]["name"],
+        Value::String("Charlie".to_string())
+    );
+
+    // Invalid enum value: should fail
+    assert!(!state.set_cell_from_input(0, "name", "Dave"));
+    assert_eq!(
+        state.data()[0]["name"],
+        Value::String("Charlie".to_string())
+    );
+
+    // Case insensitive match
+    assert!(state.set_cell_from_input(0, "name", "alice"));
+}
+
+#[test]
+fn test_validation_enum_allows_null() {
+    let mut state = sample_state();
+    assert!(state.add_column("rarity"));
+    state.set_validation_rule(
+        "rarity",
+        Some(ValidationRule {
+            enum_values: Some(vec!["common".to_string(), "rare".to_string()]),
+            ..Default::default()
+        }),
+    );
+
+    // Move away from default null first so the next set operation is a real change.
+    assert!(state.set_cell_from_input(0, "rarity", "common"));
+
+    // Null values should be allowed even with enum constraint
+    assert!(state.set_cell_from_input(0, "rarity", "null"));
+}
+
+#[test]
+fn test_validation_rule_removed_with_column() {
+    let mut state = sample_state();
+    state.set_validation_rule(
+        "age",
+        Some(ValidationRule {
+            min: Some(0.0),
+            ..Default::default()
+        }),
+    );
+    assert!(state.validation_rule("age").is_some());
+    assert!(state.delete_column("age"));
+    assert!(state.validation_rule("age").is_none());
+}
+
+#[test]
+fn test_validation_rule() {
+    let rule = ValidationRule {
+        min: Some(10.0),
+        max: Some(50.0),
+        enum_values: None,
+    };
+    assert!(rule.validate(&Value::Number(10.into())));
+    assert!(rule.validate(&Value::Number(50.into())));
+    assert!(rule.validate(&Value::Number(30.into())));
+    assert!(!rule.validate(&Value::Number(9.into())));
+    assert!(!rule.validate(&Value::Number(51.into())));
+}
+
+#[test]
+fn test_frozen_columns_getter_setter() {
+    let mut state = sample_state();
+    assert_eq!(state.frozen_columns(), 0);
+    state.set_frozen_columns(Some(2));
+    assert_eq!(state.frozen_columns(), 2);
+    state.set_frozen_columns(Some(0));
+    assert_eq!(state.frozen_columns(), 0);
+    state.set_frozen_columns(None);
+    assert_eq!(state.frozen_columns(), 0);
+}
+
+#[test]
+fn test_validation_roundtrip_via_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let json_path = dir.path().join("data.json");
+    let rows = vec![BTreeMap::from([
+        ("id".to_string(), Value::Number(1.into())),
+        ("hp".to_string(), Value::Number(50.into())),
+        ("rarity".to_string(), Value::String("common".to_string())),
+    ])];
+    jsonsheet::io::json_io::save_json(&json_path, &rows).unwrap();
+
+    let mut meta = jsonsheet::state::jsheet::JSheetMeta::default();
+    meta.set_validation_rule(
+        "hp",
+        Some(ValidationRule {
+            min: Some(0.0),
+            max: Some(9999.0),
+            ..Default::default()
+        }),
+    );
+    meta.set_validation_rule(
+        "rarity",
+        Some(ValidationRule {
+            enum_values: Some(vec![
+                "common".to_string(),
+                "rare".to_string(),
+                "epic".to_string(),
+            ]),
+            ..Default::default()
+        }),
+    );
+    meta.set_frozen_columns(Some(2));
+
+    jsonsheet::io::jsheet_io::save_sidecar_for_json(&json_path, &meta, &rows).unwrap();
+
+    let loaded = jsonsheet::io::jsheet_io::load_sidecar_with_data(&json_path, &rows).unwrap();
+    let hp_rule = loaded.validation.get("hp").unwrap();
+    assert_eq!(hp_rule.min, Some(0.0));
+    assert_eq!(hp_rule.max, Some(9999.0));
+    assert!(hp_rule.enum_values.is_none());
+
+    let rarity_rule = loaded.validation.get("rarity").unwrap();
+    assert!(rarity_rule.min.is_none());
+    assert!(rarity_rule.max.is_none());
+    assert_eq!(
+        rarity_rule.enum_values.as_ref().unwrap(),
+        &vec!["common".to_string(), "rare".to_string(), "epic".to_string()]
+    );
+
+    assert_eq!(loaded.frozen_columns, Some(2));
 }

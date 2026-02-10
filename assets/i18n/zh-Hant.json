@@ -27,5 +27,9 @@
   "table.ctx_cond_format": "條件格式",
   "table.ctx_cond_rule_placeholder": "例如 < 100",
   "table.ctx_add_cond_format": "新增規則",
-  "table.ctx_remove_cond_format": "移除"
+  "table.ctx_remove_cond_format": "移除",
+  "table.meta_validation_min": "最小值",
+  "table.meta_validation_max": "最大值",
+  "table.meta_validation_enum": "選項 (a, b, c)",
+  "toolbar.freeze_columns": "凍結"
 }

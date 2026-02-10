@@ -375,3 +375,74 @@ tfoot .summary-row td {
     margin-top: 8px;
 }
 
+/* Validation meta row */
+.meta-validation-row {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.meta-input-sm {
+    border: 1px solid #c8d3ea;
+    border-radius: 4px;
+    background: #fff;
+    padding: 3px 5px;
+    font-size: 10px;
+    width: 60px;
+}
+
+.meta-input-enum {
+    flex: 1;
+    min-width: 80px;
+}
+
+/* Toolbar small input */
+.toolbar-input-sm {
+    min-width: 50px;
+    width: 60px;
+}
+
+/* Frozen columns */
+.frozen-col {
+    position: sticky;
+    z-index: 1;
+    background: inherit;
+}
+
+thead .frozen-col {
+    z-index: 3;
+}
+
+.column-meta-row .frozen-col {
+    z-index: 3;
+}
+
+tfoot .frozen-col {
+    z-index: 2;
+}
+
+/* Conditional format rule display */
+.ctx-cond-rule {
+    align-items: center;
+}
+
+.ctx-cond-text {
+    flex: 1;
+    font-size: 11px;
+    color: #42506a;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.meta-btn-sm {
+    padding: 2px 4px;
+    font-size: 10px;
+}
+
+.ctx-input-sm {
+    flex: 1;
+    min-width: 60px;
+}
+

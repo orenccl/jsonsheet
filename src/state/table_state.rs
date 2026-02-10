@@ -3,7 +3,9 @@ use std::cmp::Ordering;
 use serde_json::{Number, Value};
 
 use crate::state::data_model::{self, Row, TableData};
-use crate::state::jsheet::{ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, SummaryKind};
+use crate::state::jsheet::{
+    ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, SummaryKind, ValidationRule,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SortOrder {
@@ -130,6 +132,22 @@ impl TableState {
 
     pub fn remove_conditional_format(&mut self, index: usize) -> bool {
         self.jsheet_meta.remove_conditional_format(index)
+    }
+
+    pub fn validation_rule(&self, column: &str) -> Option<&ValidationRule> {
+        self.jsheet_meta.validation_rule(column)
+    }
+
+    pub fn set_validation_rule(&mut self, column: &str, rule: Option<ValidationRule>) {
+        self.jsheet_meta.set_validation_rule(column, rule);
+    }
+
+    pub fn frozen_columns(&self) -> usize {
+        self.jsheet_meta.frozen_columns()
+    }
+
+    pub fn set_frozen_columns(&mut self, count: Option<usize>) {
+        self.jsheet_meta.set_frozen_columns(count);
     }
 
     pub fn column_type(&self, column: &str) -> Option<ColumnType> {

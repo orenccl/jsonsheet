@@ -26,6 +26,10 @@ pub struct JSheetMeta {
     pub cell_styles: Vec<BTreeMap<String, ColumnStyle>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditional_formats: Vec<ConditionalFormat>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub validation: BTreeMap<String, ValidationRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_columns: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +70,51 @@ pub struct ConditionalFormat {
     pub column: String,
     pub rule: String,
     pub style: ColumnStyle,
+}
+
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct ValidationRule {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(
+        default,
+        rename = "enum",
+        skip_serializing_if = "Option::is_none",
+        alias = "enum_values"
+    )]
+    pub enum_values: Option<Vec<String>>,
+}
+
+impl ValidationRule {
+    pub fn validate(&self, value: &Value) -> bool {
+        // Check numeric range
+        if self.min.is_some() || self.max.is_some() {
+            if let Some(n) = value_as_f64_ref(value) {
+                if let Some(min) = self.min {
+                    if n < min {
+                        return false;
+                    }
+                }
+                if let Some(max) = self.max {
+                    if n > max {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Check enum constraint
+        if let Some(ref allowed) = self.enum_values {
+            let display = data_model::display_value(value).to_ascii_lowercase();
+            if !value.is_null() && !allowed.iter().any(|a| a.to_ascii_lowercase() == display) {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -489,6 +538,7 @@ impl JSheetMeta {
             row.remove(column);
         }
         self.conditional_formats.retain(|cf| cf.column != column);
+        self.validation.remove(column);
     }
 
     pub fn validate_formula(formula: &str) -> bool {
@@ -519,10 +569,42 @@ impl JSheetMeta {
         value: &Value,
         input: Option<&str>,
     ) -> Option<Value> {
-        match self.column_type(column) {
-            Some(column_type) => coerce_value(value, input, column_type),
-            None => Some(value.clone()),
+        let coerced = match self.column_type(column) {
+            Some(column_type) => coerce_value(value, input, column_type)?,
+            None => value.clone(),
+        };
+
+        // Apply validation rule if present
+        if let Some(rule) = self.validation.get(column) {
+            if !rule.validate(&coerced) {
+                return None;
+            }
         }
+
+        Some(coerced)
+    }
+
+    pub fn validation_rule(&self, column: &str) -> Option<&ValidationRule> {
+        self.validation.get(column)
+    }
+
+    pub fn set_validation_rule(&mut self, column: &str, rule: Option<ValidationRule>) {
+        match rule {
+            Some(r) => {
+                self.validation.insert(column.to_string(), r);
+            }
+            None => {
+                self.validation.remove(column);
+            }
+        }
+    }
+
+    pub fn frozen_columns(&self) -> usize {
+        self.frozen_columns.unwrap_or(0)
+    }
+
+    pub fn set_frozen_columns(&mut self, count: Option<usize>) {
+        self.frozen_columns = count.filter(|&n| n > 0);
     }
 
     pub fn summary_display_for_column(
