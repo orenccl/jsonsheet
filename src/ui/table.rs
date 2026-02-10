@@ -120,20 +120,38 @@ pub fn Table(
                         th { class: "row-number", "#" }
                         for col in &columns {
                             th {
-                                class: header_class(col, &sort_spec, &selected_column),
+                                class: header_class(col, &selected_column),
                                 id: format!("col-{}", sanitize_id(col)),
                                 onclick: {
                                     let col_name = col.clone();
-                                    let mut data = data;
                                     let mut selected_column = selected_column;
                                     move |_| {
-                                        data.with_mut(|state| {
-                                            state.sort_by_column_toggle(&col_name);
-                                        });
                                         selected_column.set(Some(col_name.clone()));
                                     }
                                 },
-                                "{col}"
+                                div { class: "column-header-content",
+                                    span { class: "column-header-label", "{col}" }
+                                    button {
+                                        class: {
+                                            let indicator = sort_indicator_for_column(col, &sort_spec);
+                                            format!("sort-toggle sort-{}", indicator.class_suffix)
+                                        },
+                                        id: format!("sort-{}", sanitize_id(col)),
+                                        onclick: {
+                                            let col_name = col.clone();
+                                            let mut data = data;
+                                            let mut selected_column = selected_column;
+                                            move |evt: Event<MouseData>| {
+                                                evt.stop_propagation();
+                                                data.with_mut(|state| {
+                                                    state.sort_by_column_toggle(&col_name);
+                                                });
+                                                selected_column.set(Some(col_name.clone()));
+                                            }
+                                        },
+                                        "{sort_indicator_for_column(col, &sort_spec).symbol}"
+                                    }
+                                }
                             }
                         }
                     }
@@ -663,7 +681,6 @@ fn TableRow(
                                     return;
                                 }
 
-                                selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
                                 context_menu.set(None);
                                 editing.set(None);
@@ -727,7 +744,6 @@ fn TableRow(
                                 .cell_formula(data_index, col)
                                 .map(|formula| format!("={formula}"));
                             move |evt: Event<MouseData>| {
-                                selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
                                 context_menu.set(None);
 
@@ -772,7 +788,6 @@ fn TableRow(
                             let col_name = col.clone();
                             move |evt: Event<MouseData>| {
                                 evt.prevent_default();
-                                selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
                                 editing.set(None);
                                 drag_selecting.set(false);
@@ -816,11 +831,34 @@ fn TableRow(
     }
 }
 
-fn header_class(
+struct SortIndicator {
+    symbol: &'static str,
+    class_suffix: &'static str,
+}
+
+fn sort_indicator_for_column(
     col: &str,
     sort_spec: &Option<crate::state::table_state::SortSpec>,
-    selected_column: &Signal<Option<String>>,
-) -> String {
+) -> SortIndicator {
+    match sort_spec.as_ref() {
+        Some(spec) if spec.column == col => match spec.order {
+            SortOrder::Asc => SortIndicator {
+                symbol: "▴",
+                class_suffix: "asc",
+            },
+            SortOrder::Desc => SortIndicator {
+                symbol: "▾",
+                class_suffix: "desc",
+            },
+        },
+        _ => SortIndicator {
+            symbol: "↕",
+            class_suffix: "none",
+        },
+    }
+}
+
+fn header_class(col: &str, selected_column: &Signal<Option<String>>) -> String {
     let selected_class = if selected_column
         .read()
         .as_ref()
@@ -832,15 +870,7 @@ fn header_class(
         ""
     };
 
-    let sort_class = match sort_spec.as_ref() {
-        Some(spec) if spec.column == col => match spec.order {
-            SortOrder::Asc => "sorted-asc",
-            SortOrder::Desc => "sorted-desc",
-        },
-        _ => "",
-    };
-
-    join_classes(selected_class, sort_class)
+    selected_class.to_string()
 }
 
 fn cell_class(

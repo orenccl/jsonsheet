@@ -126,22 +126,41 @@ th.selected-col {
     background: #dfe8ff;
 }
 
-th.sorted-asc::after {
-    content: "▴";
-    margin-left: 4px;
-    color: #3a6ad6;
-    font-size: 10px;
-    line-height: 1;
-    vertical-align: middle;
+.column-header-content {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
-th.sorted-desc::after {
-    content: "▾";
-    margin-left: 4px;
-    color: #3a6ad6;
+.column-header-label {
+    flex: 1;
+}
+
+.sort-toggle {
+    border: 1px solid #c6d4ef;
+    border-radius: 3px;
+    background: #f2f6ff;
+    color: #6a7ba0;
     font-size: 10px;
     line-height: 1;
-    vertical-align: middle;
+    width: 18px;
+    height: 16px;
+    padding: 0;
+    cursor: pointer;
+}
+
+.sort-toggle:hover {
+    background: #e6eeff;
+}
+
+.sort-toggle.sort-asc,
+.sort-toggle.sort-desc {
+    color: #305ec2;
+    border-color: #9fb8ee;
+}
+
+.sort-toggle.sort-none {
+    color: #8a97b2;
 }
 
 .column-meta-row th {

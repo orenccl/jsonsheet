@@ -274,7 +274,7 @@ async function main() {
     await assertCellContains(page, 0, "name", "Zed");
 
     // Phase 3: sort + undo/redo.
-    await page.click("#col-age");
+    await page.click("#sort-age");
     await assertCellContains(page, 0, "name", "Bob");
 
     await page.click("#btn-undo");
