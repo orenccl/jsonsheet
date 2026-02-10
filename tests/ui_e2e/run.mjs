@@ -139,6 +139,19 @@ async function assertCellContains(page, rowIndex, column, expected, timeout = 50
   );
 }
 
+async function assertSummaryContains(page, column, expected, timeout = 5000) {
+  const selector = `#summary-${column}`;
+  await page.waitForFunction(
+    ({ selector: s, expectedText }) => {
+      const el = document.querySelector(s);
+      if (!el) return false;
+      return (el.textContent || "").includes(expectedText);
+    },
+    { selector, expectedText: expected },
+    { timeout }
+  );
+}
+
 async function assertSearchHighlightStyle(page, rowIndex, column, timeout = 5000) {
   const selector = `#cell-${rowIndex}-${column}`;
   await page.waitForSelector(`${selector}.search-match`, { timeout });
@@ -204,6 +217,16 @@ async function main() {
 
     await page.waitForSelector("#table-container", { timeout: 15000 });
     await waitForRowCount(page, 2, 10000);
+
+    // Phase 5: .jsheet sidecar (computed columns + summaries + type constraints).
+    await page.waitForSelector("#col-age2", { timeout: 5000 });
+    await assertCellContains(page, 0, "age2", "60");
+    await assertSummaryContains(page, "age", "27.5");
+    await assertSummaryContains(page, "age2", "110");
+    await page.click("#cell-0-age");
+    await page.fill("#cell-input-0-age", "oops");
+    await page.keyboard.press("Enter");
+    await assertCellContains(page, 0, "age", "30");
 
     // Phase 4: i18n language switch.
     await assertElementText(page, "#btn-open", "Open");

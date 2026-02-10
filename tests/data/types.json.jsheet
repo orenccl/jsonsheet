@@ -1,0 +1,22 @@
+{
+  "columns": {
+    "age": {
+      "type": "number"
+    }
+  },
+  "computed_columns": {
+    "age2": {
+      "formula": "age * 2",
+      "bake": false
+    }
+  },
+  "summaries": {
+    "age": "AVG",
+    "age2": "SUM"
+  },
+  "styles": {
+    "age": {
+      "color": "#aa0000"
+    }
+  }
+}

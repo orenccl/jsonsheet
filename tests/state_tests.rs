@@ -113,7 +113,8 @@ fn test_parse_cell_input_numbers() {
     let float_val = data_model::parse_cell_input("3.14");
     match float_val {
         Value::Number(n) => {
-            assert_eq!(n.as_f64().unwrap(), 3.14);
+            let expected = "3.14".parse::<f64>().unwrap();
+            assert_eq!(n.as_f64().unwrap(), expected);
         }
         _ => panic!("expected number"),
     }

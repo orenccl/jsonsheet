@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
-use crate::io::json_io;
+use crate::io::jsheet_io;
 use crate::state::i18n::Language;
 use crate::state::table_state::TableState;
 use crate::ui::table::Table;
@@ -25,10 +25,10 @@ pub fn App() -> Element {
         move || {
             if let Ok(path) = std::env::var("JSONSHEET_OPEN") {
                 let path = PathBuf::from(path);
-                match json_io::load_json(&path) {
-                    Ok(rows) => {
+                match jsheet_io::load_json_and_sidecar(&path) {
+                    Ok((rows, jsheet_meta)) => {
                         data.with_mut(|state| {
-                            state.replace_data(rows);
+                            state.replace_data_and_jsheet(rows, jsheet_meta);
                         });
                         file_path.set(Some(path));
                         error_message.set(None);

@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use dioxus::prelude::{Key, *};
 
 use crate::state::data_model::{self, Row};
@@ -20,10 +22,23 @@ pub fn Table(
 ) -> Element {
     let editing = use_signal::<Option<EditingCell>>(|| None);
     let snapshot = data.read().clone();
-    let columns = data_model::derive_columns(snapshot.data());
+    let columns = snapshot.display_columns();
     let visible_rows = snapshot.visible_row_indices();
     let search_query = snapshot.search_query().to_string();
     let sort_spec = snapshot.sort_spec().cloned();
+    let computed_columns: BTreeSet<String> = snapshot
+        .jsheet_meta()
+        .computed_columns
+        .keys()
+        .cloned()
+        .collect();
+    let column_styles: BTreeMap<String, String> = columns
+        .iter()
+        .map(|col| (col.clone(), snapshot.column_inline_style(col)))
+        .collect();
+    let has_summary = columns
+        .iter()
+        .any(|column| snapshot.summary_kind(column).is_some());
 
     if columns.is_empty() {
         let empty_message = i18n::tr(*language.read(), "table.empty_message");
@@ -42,6 +57,7 @@ pub fn Table(
                             th {
                                 class: header_class(col, &sort_spec, &selected_column),
                                 id: format!("col-{}", sanitize_id(col)),
+                                style: "{column_styles.get(col).cloned().unwrap_or_default()}",
                                 onclick: {
                                     let col_name = col.clone();
                                     let mut data = data;
@@ -60,17 +76,34 @@ pub fn Table(
                 }
                 tbody {
                     for (display_index, data_index) in visible_rows.iter().enumerate() {
-                        if let Some(row) = snapshot.data().get(*data_index) {
+                        if let Some(row) = snapshot.row_with_computed(*data_index) {
                             TableRow {
                                 display_index,
                                 data_index: *data_index,
-                                row: row.clone(),
+                                row,
                                 columns: columns.clone(),
+                                computed_columns: computed_columns.clone(),
+                                column_styles: column_styles.clone(),
                                 data,
                                 selected_row,
                                 selected_column,
                                 editing,
                                 search_query: search_query.clone(),
+                            }
+                        }
+                    }
+                }
+                if has_summary {
+                    tfoot {
+                        tr { class: "summary-row", id: "summary-row",
+                            td { class: "row-number summary-label", "Σ" }
+                            for col in &columns {
+                                td {
+                                    class: "summary-cell",
+                                    id: format!("summary-{}", sanitize_id(col)),
+                                    style: "{column_styles.get(col).cloned().unwrap_or_default()}",
+                                    "{snapshot.summary_display_for_column(col).unwrap_or_default()}"
+                                }
                             }
                         }
                     }
@@ -86,6 +119,8 @@ fn TableRow(
     data_index: usize,
     row: Row,
     columns: Vec<String>,
+    computed_columns: BTreeSet<String>,
+    column_styles: BTreeMap<String, String>,
     data: Signal<TableState>,
     selected_row: Signal<Option<usize>>,
     selected_column: Signal<Option<String>>,
@@ -125,6 +160,7 @@ fn TableRow(
                     .unwrap_or(false)
                 {
                     td { class: "editing-cell",
+                        style: "{column_styles.get(col).cloned().unwrap_or_default()}",
                         input {
                             class: "cell-input",
                             id: format!("cell-input-{}-{}", data_index, sanitize_id(col)),
@@ -156,8 +192,9 @@ fn TableRow(
                     }
                 } else {
                     td {
-                        class: cell_class(&row, col, &search_query),
+                        class: cell_class(&row, col, &search_query, computed_columns.contains(col)),
                         id: format!("cell-{}-{}", data_index, sanitize_id(col)),
+                        style: "{column_styles.get(col).cloned().unwrap_or_default()}",
                         onclick: {
                             let mut selected_row = selected_row;
                             let mut selected_column = selected_column;
@@ -167,14 +204,17 @@ fn TableRow(
                                 .get(col)
                                 .map(data_model::display_value)
                                 .unwrap_or_default();
+                            let is_computed = computed_columns.contains(col);
                             move |_| {
                                 selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
-                                editing.set(Some(EditingCell {
-                                    row: data_index,
-                                    column: col_name.clone(),
-                                    draft: display_for_edit.clone(),
-                                }));
+                                if !is_computed {
+                                    editing.set(Some(EditingCell {
+                                        row: data_index,
+                                        column: col_name.clone(),
+                                        draft: display_for_edit.clone(),
+                                    }));
+                                }
                             }
                         },
                         "{row.get(col).map(data_model::display_value).unwrap_or_default()}"
@@ -212,13 +252,17 @@ fn header_class(
     join_classes(selected_class, sort_class)
 }
 
-fn cell_class(row: &Row, column: &str, search_query: &str) -> String {
-    let base = "cell";
-    if cell_matches_query(row, column, search_query) {
-        join_classes(base, "search-match")
+fn cell_class(row: &Row, column: &str, search_query: &str, is_computed: bool) -> String {
+    let mut class_name = if is_computed {
+        "cell computed-cell"
     } else {
-        base.to_string()
+        "cell"
     }
+    .to_string();
+    if cell_matches_query(row, column, search_query) {
+        class_name = join_classes(&class_name, "search-match");
+    }
+    class_name
 }
 
 fn join_classes(a: &str, b: &str) -> String {

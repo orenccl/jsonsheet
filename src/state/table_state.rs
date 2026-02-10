@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use serde_json::{Number, Value};
 
 use crate::state::data_model::{self, Row, TableData};
+use crate::state::jsheet::{ColumnStyle, ColumnType, ComputedColumn, JSheetMeta, SummaryKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SortOrder {
@@ -25,6 +26,7 @@ struct HistoryEntry {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TableState {
     data: TableData,
+    jsheet_meta: JSheetMeta,
     undo_stack: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
     sort_spec: Option<SortSpec>,
@@ -45,8 +47,21 @@ impl TableState {
         }
     }
 
+    pub fn from_data_and_jsheet(data: TableData, jsheet_meta: JSheetMeta) -> Self {
+        Self {
+            data,
+            jsheet_meta,
+            ..Self::default()
+        }
+    }
+
     pub fn replace_data(&mut self, data: TableData) {
+        self.replace_data_and_jsheet(data, JSheetMeta::default());
+    }
+
+    pub fn replace_data_and_jsheet(&mut self, data: TableData, jsheet_meta: JSheetMeta) {
         self.data = data;
+        self.jsheet_meta = jsheet_meta;
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.sort_spec = None;
@@ -57,6 +72,10 @@ impl TableState {
 
     pub fn data(&self) -> &TableData {
         &self.data
+    }
+
+    pub fn jsheet_meta(&self) -> &JSheetMeta {
+        &self.jsheet_meta
     }
 
     pub fn can_undo(&self) -> bool {
@@ -83,6 +102,97 @@ impl TableState {
         &self.search_query
     }
 
+    pub fn display_columns(&self) -> Vec<String> {
+        self.jsheet_meta.display_columns(&self.data)
+    }
+
+    pub fn column_type(&self, column: &str) -> Option<ColumnType> {
+        self.jsheet_meta.column_type(column)
+    }
+
+    pub fn set_column_type(&mut self, column: &str, column_type: Option<ColumnType>) {
+        self.jsheet_meta.set_column_type(column, column_type);
+    }
+
+    pub fn computed_column(&self, column: &str) -> Option<&ComputedColumn> {
+        self.jsheet_meta.computed_column(column)
+    }
+
+    pub fn set_computed_column(&mut self, column: &str, formula: String, bake: bool) -> bool {
+        let formula = formula.trim().to_string();
+        if formula.is_empty() || !JSheetMeta::validate_formula(&formula) {
+            return false;
+        }
+        self.jsheet_meta
+            .set_computed_column(column.trim().to_string(), formula, bake);
+        true
+    }
+
+    pub fn remove_computed_column(&mut self, column: &str) {
+        self.jsheet_meta.remove_computed_column(column);
+    }
+
+    pub fn summary_kind(&self, column: &str) -> Option<SummaryKind> {
+        self.jsheet_meta.summary_kind(column)
+    }
+
+    pub fn set_summary_kind(&mut self, column: &str, summary_kind: Option<SummaryKind>) {
+        self.jsheet_meta.set_summary_kind(column, summary_kind);
+    }
+
+    pub fn column_style(&self, column: &str) -> Option<ColumnStyle> {
+        self.jsheet_meta.style(column).cloned()
+    }
+
+    pub fn set_column_style(
+        &mut self,
+        column: &str,
+        color: Option<String>,
+        background: Option<String>,
+    ) {
+        self.jsheet_meta.set_style(column, color, background);
+    }
+
+    pub fn column_inline_style(&self, column: &str) -> String {
+        self.jsheet_meta.style_inline(column)
+    }
+
+    pub fn export_json_data(&self) -> Result<TableData, String> {
+        self.data
+            .iter()
+            .map(|row| self.jsheet_meta.export_row_with_baked_computed(row))
+            .collect()
+    }
+
+    pub fn summary_display_for_column(&self, column: &str) -> Option<String> {
+        let rows = self.visible_row_indices();
+        self.jsheet_meta
+            .summary_display_for_column(&self.data, &rows, column)
+    }
+
+    pub fn row_with_computed(&self, row_index: usize) -> Option<Row> {
+        let base = self.data.get(row_index)?;
+        let mut row = base.clone();
+        for column in self.jsheet_meta.computed_columns.keys() {
+            if let Some(value) = self.jsheet_meta.value_for_column(base, column) {
+                row.insert(column.clone(), value);
+            }
+        }
+        Some(row)
+    }
+
+    pub fn cell_value(&self, row_index: usize, column: &str) -> Option<Value> {
+        let row = self.data.get(row_index)?;
+        self.jsheet_meta.value_for_column(row, column)
+    }
+
+    pub fn cell_display_value(&self, row_index: usize, column: &str) -> String {
+        self.cell_value(row_index, column)
+            .as_ref()
+            .map(data_model::display_value)
+            .unwrap_or_default()
+    }
+
     pub fn undo(&mut self) -> bool {
         if let Some(entry) = self.undo_stack.pop() {
             self.redo_stack.push(self.snapshot());
@@ -104,11 +214,24 @@ impl TableState {
     }
 
     pub fn set_cell_from_input(&mut self, row_index: usize, column: &str, input: &str) -> bool {
-        let value = data_model::parse_cell_input(input);
+        let parsed = data_model::parse_cell_input(input);
+        let Some(value) = self
+            .jsheet_meta
+            .coerce_value_for_column(column, &parsed, Some(input))
+        else {
+            return false;
+        };
         self.set_cell_value(row_index, column, value)
     }
 
     pub fn set_cell_value(&mut self, row_index: usize, column: &str, value: Value) -> bool {
+        let Some(value) = self
+            .jsheet_meta
+            .coerce_value_for_column(column, &value, None)
+        else {
+            return false;
+        };
+
         let Some(row) = self.data.get(row_index) else {
             return false;
         };
@@ -160,6 +283,7 @@ impl TableState {
 
         self.push_undo_snapshot();
         self.sort_spec = None;
+        self.jsheet_meta.remove_column_metadata(trimmed);
         if self.filter_column.as_deref() == Some(trimmed) {
             self.clear_filter();
         }
@@ -174,7 +298,12 @@ impl TableState {
         };
 
         let mut sorted = self.data.clone();
-        sorted.sort_by(|a, b| compare_row_values(a, b, column));
+        let meta = self.jsheet_meta.clone();
+        sorted.sort_by(|a, b| {
+            let left = meta.value_for_column(a, column);
+            let right = meta.value_for_column(b, column);
+            compare_values(left.as_ref(), right.as_ref())
+        });
         if matches!(next_order, SortOrder::Desc) {
             sorted.reverse();
         }
@@ -226,9 +355,13 @@ impl TableState {
         };
 
         let needle = self.search_query.to_ascii_lowercase();
-        row.get(column)
-            .map(data_model::display_value)
-            .map(|value| value.to_ascii_lowercase().contains(&needle))
+        self.jsheet_meta
+            .value_for_column(row, column)
+            .map(|value| {
+                data_model::display_value(&value)
+                    .to_ascii_lowercase()
+                    .contains(&needle)
+            })
             .unwrap_or(false)
     }
 
@@ -242,9 +375,13 @@ impl TableState {
         };
 
         let needle = self.filter_query.to_ascii_lowercase();
-        row.get(column)
-            .map(data_model::display_value)
-            .map(|value| value.to_ascii_lowercase().contains(&needle))
+        self.jsheet_meta
+            .value_for_column(row, column)
+            .map(|value| {
+                data_model::display_value(&value)
+                    .to_ascii_lowercase()
+                    .contains(&needle)
+            })
             .unwrap_or(false)
     }
 
@@ -271,10 +408,6 @@ fn toggle_sort_order(order: &SortOrder) -> SortOrder {
         SortOrder::Asc => SortOrder::Desc,
         SortOrder::Desc => SortOrder::Asc,
     }
-}
-
-fn compare_row_values(a: &Row, b: &Row, column: &str) -> Ordering {
-    compare_values(a.get(column), b.get(column))
 }
 
 fn compare_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
