@@ -103,9 +103,7 @@ State Layer logic is separated from UI to enable unit testing without GUI depend
 - Automated release binary packaging
 - GitHub Release auto-publish
 
-## Phase 5 -- .jsheet Project File
-
-### Design Principle
+## .jsheet Design Principle
 
 **JSON is the single source of truth. `.jsheet` is the view layer.**
 
@@ -123,79 +121,51 @@ ParkourItemData.json.jsheet   -- Auto-paired metadata (optional)
 - Editing styles/formulas/types auto-saves the `.jsheet` file
 - `.jsheet` files can be added to `.gitignore` depending on team preference
 
-### .jsheet Format
+### Row Key Anchoring
 
-JSON-based metadata file containing:
+- `cell_formulas`, `cell_styles`, and `comment_rows` use a designated row key field (e.g. `"id"`) instead of array index
+- Prevents data misalignment when rows are added/deleted/reordered outside the editor
+- If no suitable key column exists, falls back to row index with a warning
+
+### .jsheet Full Format Reference
 
 ```jsonc
 {
-  // Column type constraints (enforced at input time in GUI)
   "columns": {
     "hp": { "type": "number" },
     "name": { "type": "string" },
     "active": { "type": "bool" }
   },
-
-  // Cell formulas (row-index aligned; values are formula strings without '=')
-  "cell_formulas": [
-    { "total_hp": "hp * level * 10" },
-    {}
-  ],
-
-  // Sidecar-only comments
+  "column_order": ["id", "name", "hp", "level", "total_hp", "note"],
+  "row_key": "id",
+  "keyed_cell_formulas": {
+    "1001": { "total_hp": "hp * level * 10" },
+    "1002": { "total_hp": "hp * level * 10" }
+  },
   "comment_columns": ["note"],
-  "comment_rows": [
-    { "note": "reviewed by QA" },
-    { "note": "" }
+  "keyed_comment_rows": {
+    "1001": { "note": "reviewed by QA" },
+    "1002": { "note": "" }
+  },
+  "validation": {
+    "hp": { "min": 0, "max": 9999 },
+    "rarity": { "enum": ["common", "rare", "epic", "legendary"] }
+  },
+  "conditional_formats": [
+    { "column": "hp", "rule": "< 100", "style": { "color": "#ff0000" } },
+    { "column": "rarity", "rule": "== legendary", "style": { "background": "#ffd700" } }
   ],
-
-  // Summary statistics (displayed at table footer)
+  "frozen_columns": 2,
   "summaries": {
     "hp": "AVG",
     "total_hp": "SUM"
   },
-
-  // Cell styles (row-index aligned)
-  "cell_styles": [
-    { "hp": { "color": "#ff4444" } },
-    { "name": { "background": "#f0f0f0" } }
-  ]
+  "keyed_cell_styles": {
+    "1001": { "hp": { "color": "#ff4444" } },
+    "1002": { "name": { "background": "#f0f0f0" } }
+  }
 }
 ```
-
-### Column Type Constraints
-
-- Each column can be assigned a type: `string`, `number`, `bool`, `null`
-- Type validation is enforced at input time and invalid input is blocked in the GUI
-- On save, values are coerced to match the declared type (e.g. `"3"` -> `3` for number columns)
-
-### Computed Columns
-
-- Formula-based cells derived from other columns in the same row
-- Examples: `=base_attack * weapon_multiplier`, `=name + " Lv." + level`
-- Formulas are cell-level and always baked into JSON on save
-- UX: right-click a cell and edit formula in context menu, or type `=` in cell edit mode
-- Batch UX: drag select or Shift-click a range, then apply/clear formula for the whole selected range in one action
-
-### Summary Statistics
-
-- Aggregate calculations displayed at the table footer
-- Supported functions: SUM, AVG, COUNT, MIN, MAX
-- Applied per-column, works on both data columns and computed columns
-- Display-only, never written to JSON
-
-### Styles
-
-- Per-cell visual customization (text color, background color)
-- UX: right-click a cell and use context menu color controls
-- Batch UX: style apply/clear follows current selected cell range
-- Display-only, never affects JSON output
-
-### Comment Columns
-
-- Comment columns are editable in the table like normal columns
-- Marking a column as comment stores its values in `.json.jsheet` sidecar only
-- Comment columns are excluded from JSON export
 
 ### Export Behavior
 
@@ -203,6 +173,46 @@ JSON-based metadata file containing:
   - computed columns baked into output
   - comment columns excluded from output
 - Type constraints ensure saved JSON values always match declared types
+
+---
+
+## Phase 5 -- .jsheet Core (Sidecar + Column Types + Column Order)
+
+- [x] Read/write `.json.jsheet` sidecar file alongside `.json`
+- [x] Auto-detect sidecar on file open
+- [x] Column type constraints (`string`, `number`, `bool`, `null`) with input-time validation
+- [x] Column display order stored in `.jsheet`, drag to reorder
+- [x] Row key anchoring -- designate a key column for stable row references
+
+## Phase 6 -- Formulas + Summaries
+
+- [x] Cell-level formulas derived from same-row columns (e.g. `=hp * level * 10`)
+- [x] Formula UX: type `=` in cell or right-click context menu
+- [x] Batch formula: apply/clear formula for a selected range
+- [x] Formulas recalculate immediately when dependencies change
+- [x] Formulas are always baked into JSON on save
+- [x] Summary statistics at table footer (SUM, AVG, COUNT, MIN, MAX)
+
+## Phase 7 -- Styles + Comment Columns
+
+- [x] Per-cell styles (text color, background color) via right-click context menu
+- [x] Batch style: apply/clear for selected range
+- [ ] Conditional formatting rules (e.g. `hp < 100` -> red text)
+- [x] Comment columns -- editable in table, stored in `.jsheet` only, excluded from JSON export
+- [x] Styles are display-only, never affect JSON output
+
+## Phase 8 -- Data Validation + Freeze Panes
+
+- [ ] Range constraints for numeric columns (min/max)
+- [ ] Enum dropdown for columns with fixed options
+- [ ] Validation enforced at input time
+- [ ] Freeze N left columns during horizontal scrolling
+
+## Phase 9 -- Auto-fill + Multi-sheet
+
+- [ ] Auto-fill drag handle (repeat value, increment numbers, copy formulas)
+- [ ] Multi-sheet tab bar -- open multiple JSON files in one window
+- [ ] Each tab has its own independent `.jsheet` sidecar
 
 ## Target Platform
 

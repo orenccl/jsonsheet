@@ -10,6 +10,10 @@ use crate::state::data_model::{Row, TableData};
 pub struct JSheetMeta {
     #[serde(default)]
     pub columns: BTreeMap<String, ColumnConstraint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub column_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_key: Option<String>,
     #[serde(default)]
     pub comment_columns: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -67,7 +71,56 @@ impl JSheetMeta {
         for row in &self.cell_styles {
             all.extend(row.keys().cloned());
         }
-        all.into_iter().collect()
+
+        if self.column_order.is_empty() {
+            return all.into_iter().collect();
+        }
+
+        // Respect stored column_order, then append any new columns not in the order
+        let mut result: Vec<String> = self
+            .column_order
+            .iter()
+            .filter(|c| all.contains(c.as_str()))
+            .cloned()
+            .collect();
+        let ordered: BTreeSet<String> = result.iter().cloned().collect();
+        for col in &all {
+            if !ordered.contains(col) {
+                result.push(col.clone());
+            }
+        }
+        result
+    }
+
+    pub fn set_column_order(&mut self, order: Vec<String>) {
+        self.column_order = order;
+    }
+
+    pub fn row_key(&self) -> Option<&str> {
+        self.row_key.as_deref()
+    }
+
+    pub fn set_row_key(&mut self, key: Option<String>) {
+        self.row_key = key;
+    }
+
+    /// Auto-detect a suitable row key from the data (first column with all unique values).
+    pub fn auto_detect_row_key(&mut self, data: &TableData) {
+        if self.row_key.is_some() || data.is_empty() {
+            return;
+        }
+        let columns = data_model::derive_columns(data);
+        for col in &columns {
+            let values: Vec<&Value> = data.iter().filter_map(|row| row.get(col)).collect();
+            if values.len() != data.len() {
+                continue;
+            }
+            let unique: BTreeSet<String> = values.iter().map(|v| v.to_string()).collect();
+            if unique.len() == data.len() && values.iter().all(|v| !v.is_null()) {
+                self.row_key = Some(col.clone());
+                return;
+            }
+        }
     }
 
     pub fn column_type(&self, column: &str) -> Option<ColumnType> {

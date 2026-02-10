@@ -332,7 +332,7 @@ fn save_file(
     }
 
     let meta_for_save = data.read().jsheet_meta_for_save();
-    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save) {
+    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save, &export) {
         error_message.set(Some(err.to_string()));
         return;
     }
@@ -353,8 +353,10 @@ fn persist_sidecar_if_possible(
         path.clone()
     };
 
-    let meta_for_save = data.read().jsheet_meta_for_save();
-    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save) {
+    let state = data.read();
+    let meta_for_save = state.jsheet_meta_for_save();
+    let current_data = state.data();
+    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save, current_data) {
         error_message.set(Some(err.to_string()));
     } else {
         error_message.set(None);
