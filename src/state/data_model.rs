@@ -105,6 +105,14 @@ pub fn add_column(data: &mut TableData, name: &str) -> bool {
         return false;
     }
 
+    // Bootstrap empty sheets by materializing one row that contains the new column.
+    if data.is_empty() {
+        let mut row = Row::new();
+        row.insert(trimmed.to_string(), Value::Null);
+        data.push(row);
+        return true;
+    }
+
     if data.iter().any(|row| row.contains_key(trimmed)) {
         return false;
     }

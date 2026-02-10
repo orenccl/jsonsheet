@@ -183,3 +183,12 @@ fn test_delete_column_missing() {
     let mut data: TableData = vec![BTreeMap::from([("a".to_string(), Value::Null)])];
     assert!(!data_model::delete_column(&mut data, "missing"));
 }
+
+#[test]
+fn test_add_column_bootstraps_empty_table() {
+    let mut data: TableData = vec![];
+    assert!(data_model::add_column(&mut data, "first_col"));
+    assert_eq!(data.len(), 1);
+    assert_eq!(data_model::derive_columns(&data), vec!["first_col"]);
+    assert_eq!(data[0]["first_col"], Value::Null);
+}

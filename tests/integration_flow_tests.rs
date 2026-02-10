@@ -43,3 +43,18 @@ fn test_e2e_open_mixed_keys_add_column() {
     let reloaded = json_io::load_json(&path).unwrap();
     assert_eq!(data, reloaded);
 }
+
+#[test]
+fn test_e2e_bootstrap_empty_file_by_adding_column() {
+    let mut data = load_fixture("empty.json");
+    assert!(data_model::add_column(&mut data, "id"));
+    data_model::set_cell_value(&mut data, 0, "id", Value::Number(1.into()));
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty_bootstrap_out.json");
+    json_io::save_json(&path, &data).unwrap();
+
+    let reloaded = json_io::load_json(&path).unwrap();
+    assert_eq!(reloaded.len(), 1);
+    assert_eq!(reloaded[0]["id"], Value::Number(1.into()));
+}
