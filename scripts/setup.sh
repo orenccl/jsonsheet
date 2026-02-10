@@ -29,6 +29,24 @@ cargo build
 echo "[OK] Build successful"
 
 echo ""
+echo "Setting up UI E2E dependencies (optional)..."
+if command -v node &> /dev/null && command -v npm &> /dev/null; then
+    UI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../tests/ui_e2e" && pwd)"
+    export PLAYWRIGHT_BROWSERS_PATH="$UI_DIR/.playwright"
+    pushd "$UI_DIR" > /dev/null
+
+    if [ ! -d "node_modules" ]; then
+        npm install
+    fi
+
+    npx playwright install chromium
+    popd > /dev/null
+    echo "[OK] UI E2E dependencies ready"
+else
+    echo "[SKIP] Node/npm not found. UI E2E setup skipped."
+fi
+
+echo ""
 echo "=== Setup complete! ==="
 echo "Run 'cargo run' to start the app"
 echo "Run 'cargo test' to run tests"

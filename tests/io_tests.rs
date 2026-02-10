@@ -139,3 +139,23 @@ fn test_load_json_with_mixed_keys() {
     assert!(!rows[0].contains_key("c"));
     assert!(rows[1].contains_key("c"));
 }
+
+#[test]
+fn test_load_json_from_fixtures() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let types_path = manifest_dir.join("tests").join("data").join("types.json");
+    let mixed_path = manifest_dir
+        .join("tests")
+        .join("data")
+        .join("mixed_keys.json");
+
+    let types_rows = json_io::load_json(&types_path).unwrap();
+    assert_eq!(types_rows.len(), 2);
+    assert_eq!(types_rows[0]["name"], Value::String("Alice".to_string()));
+    assert_eq!(types_rows[1]["active"], Value::Bool(false));
+
+    let mixed_rows = json_io::load_json(&mixed_path).unwrap();
+    assert_eq!(mixed_rows.len(), 3);
+    assert!(mixed_rows[0].contains_key("name"));
+    assert!(mixed_rows[1].contains_key("note"));
+}

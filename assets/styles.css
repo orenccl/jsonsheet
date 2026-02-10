@@ -47,6 +47,14 @@ body {
     cursor: not-allowed;
 }
 
+.toolbar-input {
+    padding: 6px 10px;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    font-size: 13px;
+    min-width: 140px;
+}
+
 .file-path {
     margin-left: 12px;
     color: #666;
@@ -98,6 +106,10 @@ th {
     white-space: nowrap;
 }
 
+th.selected-col {
+    background: #dfe8ff;
+}
+
 td {
     border: 1px solid #e8e8e8;
     padding: 6px 12px;
@@ -124,6 +136,24 @@ tr.odd {
     background: #fafafa;
 }
 
+tr.selected-row td {
+    background: #e3f2fd;
+}
+
 tr:hover td {
     background: #e8f0fe;
+}
+
+.cell-input {
+    width: 100%;
+    border: 1px solid #7aa5ff;
+    border-radius: 3px;
+    padding: 4px 6px;
+    font-size: 13px;
+    outline: none;
+    background: #ffffff;
+}
+
+.editing-cell {
+    padding: 4px 6px;
 }
