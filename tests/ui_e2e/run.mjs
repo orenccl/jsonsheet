@@ -139,6 +139,22 @@ async function assertCellContains(page, rowIndex, column, expected, timeout = 50
   );
 }
 
+async function assertSearchHighlightStyle(page, rowIndex, column, timeout = 5000) {
+  const selector = `#cell-${rowIndex}-${column}`;
+  await page.waitForSelector(`${selector}.search-match`, { timeout });
+  const bg = await page.$eval(selector, (el) => getComputedStyle(el).backgroundColor);
+  const nums = String(bg)
+    .match(/\d+/g)
+    ?.slice(0, 3)
+    .map((v) => Number(v));
+
+  const normal = nums?.[0] === 255 && nums?.[1] === 244 && nums?.[2] === 193;
+  const hover = nums?.[0] === 255 && nums?.[1] === 232 && nums?.[2] === 156;
+  if (!normal && !hover) {
+    throw new Error(`Search highlight style not applied. backgroundColor=${bg}`);
+  }
+}
+
 async function main() {
   runOrThrow("cargo", ["build", "--quiet"], { cwd: root });
 
@@ -190,6 +206,7 @@ async function main() {
     // Phase 3: search highlight.
     await page.fill("#input-search-query", "bo");
     await page.waitForSelector("#cell-0-name.search-match", { timeout: 5000 });
+    await assertSearchHighlightStyle(page, 0, "name");
 
     // Clear filter and verify rows restore while keeping sort/search state.
     await page.click("#btn-clear-filter");

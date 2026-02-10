@@ -6,7 +6,7 @@ use crate::state::table_state::TableState;
 use crate::ui::table::Table;
 use crate::ui::toolbar::Toolbar;
 
-const STYLES: Asset = asset!("/assets/styles.css");
+const STYLESHEET: &str = include_str!("../../assets/styles.css");
 
 #[component]
 pub fn App() -> Element {
@@ -42,7 +42,7 @@ pub fn App() -> Element {
     });
 
     rsx! {
-        document::Stylesheet { href: STYLES }
+        document::Style { "{STYLESHEET}" }
         div { class: "app",
             Toolbar { data, file_path, error_message, selected_row, selected_column }
             Table { data, selected_row, selected_column }
