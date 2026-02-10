@@ -203,16 +203,16 @@ ParkourItemData.json.jsheet   -- Auto-paired metadata (optional)
 
 ## Phase 8 -- Data Validation + Freeze Panes
 
-- [ ] Range constraints for numeric columns (min/max)
-- [ ] Enum dropdown for columns with fixed options
-- [ ] Validation enforced at input time
-- [ ] Freeze N left columns during horizontal scrolling
+- [x] Range constraints for numeric columns (min/max)
+- [x] Enum dropdown for columns with fixed options
+- [x] Validation enforced at input time
+- [x] Freeze N left columns during horizontal scrolling
 
 ## Phase 9 -- Auto-fill + Multi-sheet
 
-- [ ] Auto-fill drag handle (repeat value, increment numbers, copy formulas)
-- [ ] Multi-sheet tab bar -- open multiple JSON files in one window
-- [ ] Each tab has its own independent `.jsheet` sidecar
+- [x] Auto-fill drag handle (repeat value, increment numbers, copy formulas)
+- [x] Multi-sheet tab bar -- open multiple JSON files in one window
+- [x] Each tab has its own independent `.jsheet` sidecar
 
 ## Target Platform
 

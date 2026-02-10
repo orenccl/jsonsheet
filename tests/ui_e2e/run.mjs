@@ -258,6 +258,15 @@ async function main() {
     await page.keyboard.press("Enter");
     await assertCellContains(page, 0, "age", "30");
 
+    // Phase 8: enum validation should expose dropdown options in cell editor.
+    await page.fill("#meta-val-enum-name", "Alice, Bob, Charlie, Zed");
+    await page.click("#cell-0-name");
+    await page.waitForSelector("#cell-input-0-name[list^='enum-options-']", {
+      timeout: 5000,
+    });
+    await page.click("#cell-1-age");
+    await page.waitForSelector("#cell-0-name", { timeout: 5000 });
+
     // Phase 4: i18n language switch.
     await assertElementText(page, "#btn-open", "Open");
     await assertInputPlaceholder(page, "#input-search-query", "Search all cells");
@@ -298,6 +307,14 @@ async function main() {
     await page.click("#btn-clear-filter");
     await waitForRowCount(page, 2);
 
+    // Phase 9: multi-sheet tabs should preserve each sheet state independently.
+    await page.click("#btn-new-tab");
+    await page.waitForSelector("#tab-1", { timeout: 5000 });
+    await page.waitForSelector("#empty-message", { timeout: 5000 });
+    await page.click("#tab-0");
+    await page.waitForSelector("#table-container", { timeout: 5000 });
+    await waitForRowCount(page, 2);
+
     // Keep existing coverage for row/column edits.
     await page.click("#btn-add-row");
     await page.waitForTimeout(200);
@@ -323,6 +340,15 @@ async function main() {
     await page.fill("#input-new-column", "department");
     await page.click("#btn-add-column");
     await page.waitForSelector("#col-department", { timeout: 5000 });
+
+    // Phase 9: auto-fill drag handle (single numeric source should increment).
+    await page.click("#cell-0-age");
+    await page.fill("#cell-input-0-age", "10");
+    await page.keyboard.press("Enter");
+    await assertCellContains(page, 0, "age", "10");
+    await page.dragAndDrop("#cell-0-age .fill-handle", "#cell-2-age");
+    await assertCellContains(page, 1, "age", "11");
+    await assertCellContains(page, 2, "age", "12");
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
