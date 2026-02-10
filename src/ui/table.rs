@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::{Key, *};
 
 use crate::io::jsheet_io;
 use crate::state::data_model::{self, Row};
 use crate::state::i18n::{self, Language};
-use crate::state::jsheet::{ColumnType, SummaryKind};
+use crate::state::jsheet::{ColumnType, JSheetMeta, SummaryKind};
 use crate::state::table_state::{SortOrder, TableState};
 
 #[derive(Clone, PartialEq)]
@@ -20,6 +21,43 @@ struct EditingCell {
 struct ContextCellMenu {
     row: usize,
     column: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CellPoint {
+    row: usize,
+    column: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CellRange {
+    anchor: CellPoint,
+    focus: CellPoint,
+}
+
+impl CellRange {
+    fn single(point: CellPoint) -> Self {
+        Self {
+            anchor: point,
+            focus: point,
+        }
+    }
+
+    fn contains(&self, point: CellPoint) -> bool {
+        let (row_start, row_end, column_start, column_end) = self.bounds();
+        point.row >= row_start
+            && point.row <= row_end
+            && point.column >= column_start
+            && point.column <= column_end
+    }
+
+    fn bounds(&self) -> (usize, usize, usize, usize) {
+        let row_start = self.anchor.row.min(self.focus.row);
+        let row_end = self.anchor.row.max(self.focus.row);
+        let column_start = self.anchor.column.min(self.focus.column);
+        let column_end = self.anchor.column.max(self.focus.column);
+        (row_start, row_end, column_start, column_end)
+    }
 }
 
 enum CommitResult {
@@ -42,6 +80,9 @@ pub fn Table(
     let context_formula = use_signal(String::new);
     let context_text_color = use_signal(|| "#1a1a1a".to_string());
     let context_bg_color = use_signal(|| "#ffffff".to_string());
+    let selected_range = use_signal::<Option<CellRange>>(|| None);
+    let mut drag_selecting = use_signal(|| false);
+    let drag_moved = use_signal(|| false);
 
     let snapshot = data.read().clone();
     let columns = snapshot.display_columns();
@@ -66,6 +107,12 @@ pub fn Table(
             id: "table-container",
             onclick: move |_| {
                 context_menu.set(None);
+            },
+            onmouseup: move |_| {
+                drag_selecting.set(false);
+            },
+            onmouseleave: move |_| {
+                drag_selecting.set(false);
             },
             table {
                 thead {
@@ -99,7 +146,6 @@ pub fn Table(
                                 file_path,
                                 error_message,
                                 column: col.clone(),
-                                selected_column,
                             }
                         }
                     }
@@ -123,6 +169,9 @@ pub fn Table(
                                 context_formula,
                                 context_text_color,
                                 context_bg_color,
+                                selected_range,
+                                drag_selecting,
+                                drag_moved,
                                 search_query: search_query.clone(),
                             }
                         }
@@ -156,6 +205,9 @@ pub fn Table(
                     context_bg_color,
                     row_index: menu.row,
                     column: menu.column,
+                    selected_range,
+                    columns: columns.clone(),
+                    visible_rows: visible_rows.clone(),
                 }
             }
         }
@@ -169,7 +221,6 @@ fn ColumnMetaCell(
     file_path: Signal<Option<PathBuf>>,
     error_message: Signal<Option<String>>,
     column: String,
-    selected_column: Signal<Option<String>>,
 ) -> Element {
     let snapshot = data.read().clone();
     let column_type = snapshot
@@ -195,7 +246,6 @@ fn ColumnMetaCell(
     let option_summary_min = i18n::tr(current_language, "toolbar.option.summary_min");
     let option_summary_max = i18n::tr(current_language, "toolbar.option.summary_max");
     let meta_comment_label = i18n::tr(current_language, "table.meta_comment");
-    let meta_focus_label = i18n::tr(current_language, "table.meta_focus");
 
     rsx! {
         th {
@@ -265,14 +315,6 @@ fn ColumnMetaCell(
                     "{meta_comment_label}"
                 }
             }
-            button {
-                class: "meta-focus-btn",
-                id: format!("meta-focus-{}", sanitize_id(&column)),
-                onclick: move |_| {
-                    selected_column.set(Some(column.clone()));
-                },
-                "{meta_focus_label}"
-            }
         }
     }
 }
@@ -289,6 +331,9 @@ fn CellContextMenu(
     context_bg_color: Signal<String>,
     row_index: usize,
     column: String,
+    selected_range: Signal<Option<CellRange>>,
+    columns: Vec<String>,
+    visible_rows: Vec<usize>,
 ) -> Element {
     let current_language = *language.read();
     let formula_label = i18n::tr(current_language, "table.ctx_formula");
@@ -323,15 +368,48 @@ fn CellContextMenu(
                     id: "btn-context-apply-formula",
                     onclick: {
                         let col = column.clone();
+                        let columns = columns.clone();
+                        let visible_rows = visible_rows.clone();
                         move |_| {
                             let formula = context_formula.read().clone();
-                            let ok = data.with_mut(|state| state.set_cell_formula(row_index, &col, formula));
-                            if ok {
-                                persist_sidecar_if_possible(data, file_path, error_message);
-                            } else {
+                            let Some(normalized_formula) = JSheetMeta::normalize_formula(&formula) else {
                                 error_message.set(Some(
                                     i18n::tr(*language.read(), "error.invalid_computed_formula").to_string(),
                                 ));
+                                return;
+                            };
+
+                            let targets = selected_cell_targets(
+                                selected_range.read().as_ref().copied(),
+                                &columns,
+                                &visible_rows,
+                                row_index,
+                                &col,
+                            );
+                            let mut changed = false;
+                            data.with_mut(|state| {
+                                for (target_row, target_col) in &targets {
+                                    if state
+                                        .cell_formula(*target_row, target_col)
+                                        .as_deref()
+                                        == Some(normalized_formula.as_str())
+                                    {
+                                        continue;
+                                    }
+                                    if state.set_cell_formula(
+                                        *target_row,
+                                        target_col,
+                                        normalized_formula.clone(),
+                                    ) {
+                                        changed = true;
+                                    }
+                                }
+                            });
+
+                            if changed {
+                                persist_sidecar_if_possible(data, file_path, error_message);
+                            } else {
+                                error_message.set(None);
                             }
                         }
                     },
@@ -342,10 +420,31 @@ fn CellContextMenu(
                     id: "btn-context-clear-formula",
                     onclick: {
                         let col = column.clone();
+                        let columns = columns.clone();
+                        let visible_rows = visible_rows.clone();
                         move |_| {
-                            data.with_mut(|state| state.remove_cell_formula(row_index, &col));
+                            let targets = selected_cell_targets(
+                                selected_range.read().as_ref().copied(),
+                                &columns,
+                                &visible_rows,
+                                row_index,
+                                &col,
+                            );
+                            let mut changed = false;
+                            data.with_mut(|state| {
+                                for (target_row, target_col) in &targets {
+                                    if state.cell_formula(*target_row, target_col).is_some() {
+                                        state.remove_cell_formula(*target_row, target_col);
+                                        changed = true;
+                                    }
+                                }
+                            });
                             context_formula.set(String::new());
-                            persist_sidecar_if_possible(data, file_path, error_message);
+                            if changed {
+                                persist_sidecar_if_possible(data, file_path, error_message);
+                            } else {
+                                error_message.set(None);
+                            }
                         }
                     },
                     "{clear_formula_label}"
@@ -379,10 +478,28 @@ fn CellContextMenu(
                     id: "btn-context-apply-style",
                     onclick: {
                         let col = column.clone();
+                        let columns = columns.clone();
+                        let visible_rows = visible_rows.clone();
                         move |_| {
                             let color = Some(context_text_color.read().clone());
                             let background = Some(context_bg_color.read().clone());
-                            data.with_mut(|state| state.set_cell_style(row_index, &col, color, background));
+                            let targets = selected_cell_targets(
+                                selected_range.read().as_ref().copied(),
+                                &columns,
+                                &visible_rows,
+                                row_index,
+                                &col,
+                            );
+                            data.with_mut(|state| {
+                                for (target_row, target_col) in &targets {
+                                    state.set_cell_style(
+                                        *target_row,
+                                        target_col,
+                                        color.clone(),
+                                        background.clone(),
+                                    );
+                                }
+                            });
                             persist_sidecar_if_possible(data, file_path, error_message);
                         }
                     },
@@ -393,8 +510,21 @@ fn CellContextMenu(
                     id: "btn-context-clear-style",
                     onclick: {
                         let col = column.clone();
+                        let columns = columns.clone();
+                        let visible_rows = visible_rows.clone();
                         move |_| {
-                            data.with_mut(|state| state.clear_cell_style(row_index, &col));
+                            let targets = selected_cell_targets(
+                                selected_range.read().as_ref().copied(),
+                                &columns,
+                                &visible_rows,
+                                row_index,
+                                &col,
+                            );
+                            data.with_mut(|state| {
+                                for (target_row, target_col) in &targets {
+                                    state.clear_cell_style(*target_row, target_col);
+                                }
+                            });
                             context_text_color.set("#1a1a1a".to_string());
                             context_bg_color.set("#ffffff".to_string());
                             persist_sidecar_if_possible(data, file_path, error_message);
@@ -433,6 +563,9 @@ fn TableRow(
     context_formula: Signal<String>,
     context_text_color: Signal<String>,
     context_bg_color: Signal<String>,
+    selected_range: Signal<Option<CellRange>>,
+    drag_selecting: Signal<bool>,
+    drag_moved: Signal<bool>,
     search_query: String,
 ) -> Element {
     let snapshot = data.read().clone();
@@ -464,10 +597,11 @@ fn TableRow(
                 onclick: move |_| {
                     selected_row.set(Some(data_index));
                     context_menu.set(None);
+                    selected_range.set(None);
                 },
                 "{display_index + 1}"
             }
-            for col in &columns {
+            for (column_index, col) in columns.iter().enumerate() {
                 if editing
                     .read()
                     .as_ref()
@@ -504,9 +638,85 @@ fn TableRow(
                     }
                 } else {
                     td {
-                        class: cell_class(&row, col, &search_query, formula_columns.contains(col)),
+                        class: cell_class(
+                            &row,
+                            col,
+                            &search_query,
+                            formula_columns.contains(col),
+                            selected_range
+                                .read()
+                                .as_ref()
+                                .map(|range| {
+                                    range.contains(CellPoint {
+                                        row: display_index,
+                                        column: column_index,
+                                    })
+                                })
+                                .unwrap_or(false),
+                        ),
                         id: format!("cell-{}-{}", data_index, sanitize_id(col)),
                         style: "{snapshot.cell_inline_style(data_index, col)}",
+                        onmousedown: {
+                            let col_name = col.clone();
+                            move |evt: Event<MouseData>| {
+                                if evt.trigger_button() != Some(MouseButton::Primary) {
+                                    return;
+                                }
+
+                                selected_row.set(Some(data_index));
+                                selected_column.set(Some(col_name.clone()));
+                                context_menu.set(None);
+                                editing.set(None);
+
+                                let point = CellPoint {
+                                    row: display_index,
+                                    column: column_index,
+                                };
+                                if evt.modifiers().shift() {
+                                    let anchor = selected_range
+                                        .read()
+                                        .as_ref()
+                                        .copied()
+                                        .map(|range| range.anchor)
+                                        .unwrap_or(point);
+                                    selected_range.set(Some(CellRange {
+                                        anchor,
+                                        focus: point,
+                                    }));
+                                } else {
+                                    selected_range.set(Some(CellRange::single(point)));
+                                }
+                                drag_selecting.set(true);
+                                drag_moved.set(false);
+                            }
+                        },
+                        onmouseenter: move |_| {
+                            if !*drag_selecting.read() {
+                                return;
+                            }
+
+                            let point = CellPoint {
+                                row: display_index,
+                                column: column_index,
+                            };
+                            let mut changed = false;
+                            selected_range.with_mut(|range| {
+                                if let Some(range) = range {
+                                    if range.focus != point {
+                                        range.focus = point;
+                                        changed = true;
+                                    }
+                                } else {
+                                    *range = Some(CellRange::single(point));
+                                }
+                            });
+                            if changed {
+                                drag_moved.set(true);
+                            }
+                        },
+                        onmouseup: move |_| {
+                            drag_selecting.set(false);
+                        },
                         onclick: {
                             let col_name = col.clone();
                             let display_for_edit = row
@@ -516,11 +726,38 @@ fn TableRow(
                             let formula_for_edit = snapshot
                                 .cell_formula(data_index, col)
                                 .map(|formula| format!("={formula}"));
-                            move |_| {
+                            move |evt: Event<MouseData>| {
                                 selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
                                 context_menu.set(None);
 
+                                let point = CellPoint {
+                                    row: display_index,
+                                    column: column_index,
+                                };
+                                if evt.modifiers().shift() {
+                                    let anchor = selected_range
+                                        .read()
+                                        .as_ref()
+                                        .copied()
+                                        .map(|range| range.anchor)
+                                        .unwrap_or(point);
+                                    selected_range.set(Some(CellRange {
+                                        anchor,
+                                        focus: point,
+                                    }));
+                                    editing.set(None);
+                                    return;
+                                }
+
+                                let dragged = *drag_moved.read();
+                                if dragged {
+                                    drag_moved.set(false);
+                                    editing.set(None);
+                                    return;
+                                }
+
+                                selected_range.set(Some(CellRange::single(point)));
                                 let draft = formula_for_edit
                                     .clone()
                                     .unwrap_or_else(|| display_for_edit.clone());
@@ -538,6 +775,21 @@ fn TableRow(
                                 selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
                                 editing.set(None);
+                                drag_selecting.set(false);
+                                drag_moved.set(false);
+
+                                let point = CellPoint {
+                                    row: display_index,
+                                    column: column_index,
+                                };
+                                let in_range = selected_range
+                                    .read()
+                                    .as_ref()
+                                    .map(|range| range.contains(point))
+                                    .unwrap_or(false);
+                                if !in_range {
+                                    selected_range.set(Some(CellRange::single(point)));
+                                }
 
                                 let state = data.read();
                                 let formula = state
@@ -591,7 +843,13 @@ fn header_class(
     join_classes(selected_class, sort_class)
 }
 
-fn cell_class(row: &Row, column: &str, search_query: &str, has_formula: bool) -> String {
+fn cell_class(
+    row: &Row,
+    column: &str,
+    search_query: &str,
+    has_formula: bool,
+    in_selected_range: bool,
+) -> String {
     let mut class_name = if has_formula {
         "cell formula-cell"
     } else {
@@ -601,6 +859,9 @@ fn cell_class(row: &Row, column: &str, search_query: &str, has_formula: bool) ->
 
     if cell_matches_query(row, column, search_query) {
         class_name = join_classes(&class_name, "search-match");
+    }
+    if in_selected_range {
+        class_name = join_classes(&class_name, "in-range");
     }
 
     class_name
@@ -640,6 +901,38 @@ fn cell_matches_query(row: &Row, column: &str, query: &str) -> bool {
         .map(data_model::display_value)
         .map(|value| value.to_ascii_lowercase().contains(&needle))
         .unwrap_or(false)
+}
+
+fn selected_cell_targets(
+    selected_range: Option<CellRange>,
+    columns: &[String],
+    visible_rows: &[usize],
+    fallback_row: usize,
+    fallback_column: &str,
+) -> Vec<(usize, String)> {
+    let Some(selected_range) = selected_range else {
+        return vec![(fallback_row, fallback_column.to_string())];
+    };
+
+    let (row_start, row_end, column_start, column_end) = selected_range.bounds();
+    let mut targets = Vec::new();
+    for display_row in row_start..=row_end {
+        let Some(data_row) = visible_rows.get(display_row).copied() else {
+            continue;
+        };
+        for column_index in column_start..=column_end {
+            let Some(column_name) = columns.get(column_index) else {
+                continue;
+            };
+            targets.push((data_row, column_name.clone()));
+        }
+    }
+
+    if targets.is_empty() {
+        vec![(fallback_row, fallback_column.to_string())]
+    } else {
+        targets
+    }
 }
 
 fn commit_edit(

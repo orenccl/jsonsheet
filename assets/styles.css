@@ -127,13 +127,21 @@ th.selected-col {
 }
 
 th.sorted-asc::after {
-    content: " ^";
+    content: "▴";
+    margin-left: 4px;
     color: #3a6ad6;
+    font-size: 10px;
+    line-height: 1;
+    vertical-align: middle;
 }
 
 th.sorted-desc::after {
-    content: " v";
+    content: "▾";
+    margin-left: 4px;
     color: #3a6ad6;
+    font-size: 10px;
+    line-height: 1;
+    vertical-align: middle;
 }
 
 .column-meta-row th {
@@ -259,6 +267,22 @@ tr:hover td.cell.search-match {
 
 .formula-cell {
     font-style: italic;
+}
+
+.cell.in-range {
+    background: #d7e7ff;
+}
+
+tr:hover td.cell.in-range {
+    background: #cadfff;
+}
+
+.cell.search-match.in-range {
+    background: #fff4c1;
+}
+
+tr:hover td.cell.search-match.in-range {
+    background: #ffe89c;
 }
 
 .cell-input {

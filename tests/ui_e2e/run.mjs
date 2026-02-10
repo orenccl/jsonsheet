@@ -232,12 +232,15 @@ async function main() {
     await assertSummaryContains(page, "age", "27.5");
     await assertSummaryContains(page, "age2", "110");
 
-    // Cell context menu: right-click to update single-cell formula.
-    await page.click("#cell-0-age2", { button: "right" });
+    // Cell context menu: range-select then batch update formula.
+    await page.click("#cell-0-age2");
+    await page.click("#cell-1-age2", { modifiers: ["Shift"] });
+    await page.click("#cell-1-age2", { button: "right" });
     await page.fill("#context-formula", "=age * 3");
     await page.click("#btn-context-apply-formula");
     await assertCellContains(page, 0, "age2", "90");
-    await assertSummaryContains(page, "age2", "140");
+    await assertCellContains(page, 1, "age2", "75");
+    await assertSummaryContains(page, "age2", "165");
 
     // Apply cell style from context menu.
     await page.fill("#context-text-color", "#ff0000");

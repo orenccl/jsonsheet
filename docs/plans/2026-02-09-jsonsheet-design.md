@@ -175,6 +175,7 @@ JSON-based metadata file containing:
 - Examples: `=base_attack * weapon_multiplier`, `=name + " Lv." + level`
 - Formulas are cell-level and always baked into JSON on save
 - UX: right-click a cell and edit formula in context menu, or type `=` in cell edit mode
+- Batch UX: drag select or Shift-click a range, then apply/clear formula for the whole selected range in one action
 
 ### Summary Statistics
 
@@ -187,6 +188,7 @@ JSON-based metadata file containing:
 
 - Per-cell visual customization (text color, background color)
 - UX: right-click a cell and use context menu color controls
+- Batch UX: style apply/clear follows current selected cell range
 - Display-only, never affects JSON output
 
 ### Comment Columns
