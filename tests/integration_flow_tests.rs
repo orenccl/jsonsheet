@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use jsonsheet::io::json_io;
 use jsonsheet::state::data_model;
+use jsonsheet::state::table_state::TableState;
 
 fn load_fixture(name: &str) -> Vec<std::collections::BTreeMap<String, Value>> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -57,4 +58,23 @@ fn test_e2e_bootstrap_empty_file_by_adding_column() {
     let reloaded = json_io::load_json(&path).unwrap();
     assert_eq!(reloaded.len(), 1);
     assert_eq!(reloaded[0]["id"], Value::Number(1.into()));
+}
+
+#[test]
+fn test_e2e_phase3_sort_filter_search_undo() {
+    let data = load_fixture("types.json");
+    let mut state = TableState::from_data(data);
+
+    assert!(state.sort_by_column_toggle("age"));
+    assert_eq!(state.data()[0]["name"], Value::String("Bob".to_string()));
+
+    state.set_filter(Some("name".to_string()), "bo".to_string());
+    let visible = state.visible_row_indices();
+    assert_eq!(visible, vec![0]);
+
+    state.set_search("bo".to_string());
+    assert!(state.cell_matches_search(0, "name"));
+
+    assert!(state.undo());
+    assert_eq!(state.data()[0]["name"], Value::String("Alice".to_string()));
 }

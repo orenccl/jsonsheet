@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use std::path::PathBuf;
 
 use crate::io::json_io;
-use crate::state::data_model::TableData;
+use crate::state::table_state::TableState;
 use crate::ui::table::Table;
 use crate::ui::toolbar::Toolbar;
 
@@ -10,11 +10,11 @@ const STYLES: Asset = asset!("/assets/styles.css");
 
 #[component]
 pub fn App() -> Element {
-    let data = use_signal(TableData::new);
+    let data = use_signal(TableState::new);
     let file_path = use_signal::<Option<PathBuf>>(|| None);
     let error_message = use_signal::<Option<String>>(|| None);
-    let selected_row = use_signal::<Option<usize>>(|| None);
-    let selected_column = use_signal::<Option<String>>(|| None);
+    let mut selected_row = use_signal::<Option<usize>>(|| None);
+    let mut selected_column = use_signal::<Option<String>>(|| None);
 
     use_effect({
         let mut data = data;
@@ -25,9 +25,13 @@ pub fn App() -> Element {
                 let path = PathBuf::from(path);
                 match json_io::load_json(&path) {
                     Ok(rows) => {
-                        data.set(rows);
+                        data.with_mut(|state| {
+                            state.replace_data(rows);
+                        });
                         file_path.set(Some(path));
                         error_message.set(None);
+                        selected_row.set(None);
+                        selected_column.set(None);
                     }
                     Err(e) => {
                         error_message.set(Some(e.to_string()));

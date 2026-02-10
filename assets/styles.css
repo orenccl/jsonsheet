@@ -21,6 +21,7 @@ body {
 .toolbar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 8px 12px;
     background: #ffffff;
@@ -53,6 +54,15 @@ body {
     border-radius: 4px;
     font-size: 13px;
     min-width: 140px;
+}
+
+.toolbar-select {
+    padding: 6px 10px;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    font-size: 13px;
+    min-width: 150px;
+    background: #ffffff;
 }
 
 .file-path {
@@ -110,6 +120,16 @@ th.selected-col {
     background: #dfe8ff;
 }
 
+th.sorted-asc::after {
+    content: " ↑";
+    color: #3a6ad6;
+}
+
+th.sorted-desc::after {
+    content: " ↓";
+    color: #3a6ad6;
+}
+
 td {
     border: 1px solid #e8e8e8;
     padding: 6px 12px;
@@ -142,6 +162,14 @@ tr.selected-row td {
 
 tr:hover td {
     background: #e8f0fe;
+}
+
+.cell.search-match {
+    background: #fff4c1;
+}
+
+tr:hover td.cell.search-match {
+    background: #ffe89c;
 }
 
 .cell-input {

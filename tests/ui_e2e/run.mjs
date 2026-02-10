@@ -118,6 +118,27 @@ async function findAppPage(browser, attempts = 50) {
   throw new Error(`JsonSheet page not found via CDP. Pages: ${JSON.stringify(pages)}`);
 }
 
+async function waitForRowCount(page, expected, timeout = 5000) {
+  await page.waitForFunction(
+    (count) => document.querySelectorAll("tbody tr").length === count,
+    expected,
+    { timeout }
+  );
+}
+
+async function assertCellContains(page, rowIndex, column, expected, timeout = 5000) {
+  const selector = `#cell-${rowIndex}-${column}`;
+  await page.waitForFunction(
+    ({ selector: s, expectedText }) => {
+      const el = document.querySelector(s);
+      if (!el) return false;
+      return (el.textContent || "").includes(expectedText);
+    },
+    { selector, expectedText: expected },
+    { timeout }
+  );
+}
+
 async function main() {
   runOrThrow("cargo", ["build", "--quiet"], { cwd: root });
 
@@ -142,12 +163,39 @@ async function main() {
     const page = await findAppPage(browser);
 
     await page.waitForSelector("#table-container", { timeout: 15000 });
+    await waitForRowCount(page, 2, 10000);
 
+    // Phase 2 baseline: edit cell.
     await page.click("#cell-0-name");
     await page.fill("#cell-input-0-name", "Zed");
     await page.keyboard.press("Enter");
-    await page.waitForSelector("#cell-0-name:has-text(\"Zed\")");
+    await assertCellContains(page, 0, "name", "Zed");
 
+    // Phase 3: sort + undo/redo.
+    await page.click("#col-age");
+    await assertCellContains(page, 0, "name", "Bob");
+
+    await page.click("#btn-undo");
+    await assertCellContains(page, 0, "name", "Zed");
+
+    await page.click("#btn-redo");
+    await assertCellContains(page, 0, "name", "Bob");
+
+    // Phase 3: filter.
+    await page.selectOption("#select-filter-column", "name");
+    await page.fill("#input-filter-query", "bo");
+    await waitForRowCount(page, 1);
+    await assertCellContains(page, 0, "name", "Bob");
+
+    // Phase 3: search highlight.
+    await page.fill("#input-search-query", "bo");
+    await page.waitForSelector("#cell-0-name.search-match", { timeout: 5000 });
+
+    // Clear filter and verify rows restore while keeping sort/search state.
+    await page.click("#btn-clear-filter");
+    await waitForRowCount(page, 2);
+
+    // Keep existing coverage for row/column edits.
     await page.click("#btn-add-row");
     await page.waitForTimeout(200);
     let rowCount = await page.locator("tbody tr").count();
