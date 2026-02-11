@@ -17,6 +17,71 @@ body {
     height: 100vh;
 }
 
+.tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #eef2fb;
+    border-bottom: 1px solid #d5deef;
+    flex-shrink: 0;
+}
+
+.tab-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #e1e8f8;
+    border: 1px solid #c2cde3;
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.tab-item.active {
+    background: #ffffff;
+    border-color: #97afdf;
+}
+
+.tab-btn {
+    border: 0;
+    background: transparent;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: #30496f;
+    cursor: pointer;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tab-btn:hover {
+    background: #f0f4ff;
+}
+
+.tab-close-btn,
+.tab-add-btn {
+    border: 1px solid #b9c7e2;
+    background: #ffffff;
+    color: #3f5273;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.tab-close-btn {
+    width: 20px;
+    height: 20px;
+}
+
+.tab-add-btn {
+    width: 24px;
+    height: 24px;
+    margin-left: 2px;
+}
+
 /* Toolbar */
 .toolbar {
     display: flex;
@@ -250,6 +315,7 @@ td {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    position: relative;
 }
 
 .row-number {
@@ -294,6 +360,27 @@ tr:hover td.cell.search-match {
 
 tr:hover td.cell.in-range {
     background: #cadfff;
+}
+
+.cell.autofill-preview {
+    background: #e8f2ff;
+}
+
+tr:hover td.cell.autofill-preview {
+    background: #d9e9ff;
+}
+
+.fill-handle {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 8px;
+    height: 8px;
+    border: 1px solid #ffffff;
+    background: #2f6de1;
+    border-radius: 2px;
+    cursor: crosshair;
+    z-index: 4;
 }
 
 .cell.search-match.in-range {

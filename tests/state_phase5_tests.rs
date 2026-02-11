@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use jsonsheet::state::jsheet::{
     ColumnStyle, ColumnType, ConditionalFormat, ParsedCondRule, SummaryKind, ValidationRule,
 };
-use jsonsheet::state::table_state::TableState;
+use jsonsheet::state::table_state::{CellEdit, CellEditKind, TableState};
 
 fn sample_state() -> TableState {
     TableState::from_data(vec![
@@ -468,4 +468,82 @@ fn test_validation_roundtrip_via_sidecar() {
     );
 
     assert_eq!(loaded.frozen_columns, Some(2));
+}
+
+#[test]
+fn test_apply_cell_edits_batches_into_single_undo_snapshot() {
+    let mut state = sample_state();
+    let changed = state.apply_cell_edits(vec![
+        CellEdit {
+            row_index: 0,
+            column: "age".to_string(),
+            kind: CellEditKind::Value(Value::Number(40.into())),
+        },
+        CellEdit {
+            row_index: 1,
+            column: "age".to_string(),
+            kind: CellEditKind::Value(Value::Number(35.into())),
+        },
+    ]);
+
+    assert_eq!(changed, 2);
+    assert_eq!(state.data()[0]["age"], Value::Number(40.into()));
+    assert_eq!(state.data()[1]["age"], Value::Number(35.into()));
+
+    assert!(state.undo());
+    assert_eq!(state.data()[0]["age"], Value::Number(30.into()));
+    assert_eq!(state.data()[1]["age"], Value::Number(25.into()));
+}
+
+#[test]
+fn test_apply_cell_edits_value_replaces_existing_formula() {
+    let mut state = sample_state();
+    assert!(state.add_column("age2"));
+    assert!(state.set_cell_formula(0, "age2", "=age * 2".to_string()));
+    assert_eq!(state.cell_display_value(0, "age2"), "60");
+
+    let changed = state.apply_cell_edits(vec![CellEdit {
+        row_index: 0,
+        column: "age2".to_string(),
+        kind: CellEditKind::Value(Value::Number(999.into())),
+    }]);
+    assert_eq!(changed, 1);
+    assert!(state.cell_formula(0, "age2").is_none());
+    assert_eq!(state.cell_display_value(0, "age2"), "999");
+}
+
+#[test]
+fn test_apply_cell_edits_formula_write() {
+    let mut state = sample_state();
+    assert!(state.add_column("score"));
+    let changed = state.apply_cell_edits(vec![CellEdit {
+        row_index: 1,
+        column: "score".to_string(),
+        kind: CellEditKind::Formula("=age + 10".to_string()),
+    }]);
+
+    assert_eq!(changed, 1);
+    assert_eq!(state.cell_formula(1, "score").as_deref(), Some("age + 10"));
+    assert_eq!(state.cell_display_value(1, "score"), "35");
+}
+
+#[test]
+fn test_apply_cell_edits_respects_validation_rules() {
+    let mut state = sample_state();
+    state.set_validation_rule(
+        "name",
+        Some(ValidationRule {
+            enum_values: Some(vec!["Alice".to_string(), "Bob".to_string()]),
+            ..Default::default()
+        }),
+    );
+
+    let changed = state.apply_cell_edits(vec![CellEdit {
+        row_index: 0,
+        column: "name".to_string(),
+        kind: CellEditKind::Value(Value::String("Charlie".to_string())),
+    }]);
+
+    assert_eq!(changed, 0);
+    assert_eq!(state.data()[0]["name"], Value::String("Alice".to_string()));
 }

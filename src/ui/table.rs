@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::{Key, *};
+use serde_json::Value;
 
 use crate::io::jsheet_io;
 use crate::state::data_model::{self, Row};
@@ -10,7 +11,7 @@ use crate::state::i18n::{self, Language};
 use crate::state::jsheet::{
     ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, ParsedCondRule, SummaryKind,
 };
-use crate::state::table_state::{SortOrder, TableState};
+use crate::state::table_state::{CellEdit, CellEditKind, SortOrder, TableState};
 
 #[derive(Clone, PartialEq)]
 struct EditingCell {
@@ -68,6 +69,11 @@ enum CommitResult {
     InvalidTypedValue,
 }
 
+struct AutoFillPlan {
+    edits: Vec<CellEdit>,
+    touches_formula: bool,
+}
+
 #[component]
 pub fn Table(
     data: Signal<TableState>,
@@ -87,6 +93,9 @@ pub fn Table(
     let selected_range = use_signal::<Option<CellRange>>(|| None);
     let mut drag_selecting = use_signal(|| false);
     let drag_moved = use_signal(|| false);
+    let autofill_dragging = use_signal(|| false);
+    let autofill_source = use_signal::<Option<CellRange>>(|| None);
+    let autofill_target = use_signal::<Option<CellPoint>>(|| None);
 
     let snapshot = data.read().clone();
     let columns = snapshot.display_columns();
@@ -113,11 +122,41 @@ pub fn Table(
             onclick: move |_| {
                 context_menu.set(None);
             },
-            onmouseup: move |_| {
-                drag_selecting.set(false);
+            onmouseup: {
+                let columns = columns.clone();
+                let visible_rows = visible_rows.clone();
+                move |_| {
+                    drag_selecting.set(false);
+                    finish_autofill_drag(
+                        data,
+                        file_path,
+                        error_message,
+                        selected_range,
+                        autofill_dragging,
+                        autofill_source,
+                        autofill_target,
+                        &columns,
+                        &visible_rows,
+                    );
+                }
             },
-            onmouseleave: move |_| {
-                drag_selecting.set(false);
+            onmouseleave: {
+                let columns = columns.clone();
+                let visible_rows = visible_rows.clone();
+                move |_| {
+                    drag_selecting.set(false);
+                    finish_autofill_drag(
+                        data,
+                        file_path,
+                        error_message,
+                        selected_range,
+                        autofill_dragging,
+                        autofill_source,
+                        autofill_target,
+                        &columns,
+                        &visible_rows,
+                    );
+                }
             },
             table {
                 thead {
@@ -206,6 +245,9 @@ pub fn Table(
                                 selected_range,
                                 drag_selecting,
                                 drag_moved,
+                                autofill_dragging,
+                                autofill_source,
+                                autofill_target,
                                 search_query: search_query.clone(),
                                 frozen_count,
                             }
@@ -701,9 +743,9 @@ fn CellContextMenu(
                             span { class: "ctx-cond-text",
                                 "{cf.rule}"
                                 if cf.style.color.is_some() || cf.style.background.is_some() {
-                                    " → "
+                                    " [style]"
                                     if let Some(ref c) = cf.style.color {
-                                        span { style: "color:{c}", "■" }
+                                        span { style: "color:{c}", " A" }
                                     }
                                     if let Some(ref bg) = cf.style.background {
                                         span { style: "background:{bg}", "  " }
@@ -808,6 +850,9 @@ fn TableRow(
     selected_range: Signal<Option<CellRange>>,
     drag_selecting: Signal<bool>,
     drag_moved: Signal<bool>,
+    autofill_dragging: Signal<bool>,
+    autofill_source: Signal<Option<CellRange>>,
+    autofill_target: Signal<Option<CellPoint>>,
     search_query: String,
     frozen_count: usize,
 ) -> Element {
@@ -858,6 +903,7 @@ fn TableRow(
                         input {
                             class: editing_input_class(editing),
                             id: format!("cell-input-{}-{}", data_index, sanitize_id(col)),
+                            list: "{editing_enum_list_id(&snapshot, col)}",
                             value: "{editing.read().as_ref().map(|cell| cell.draft.clone()).unwrap_or_default()}",
                             autofocus: true,
                             oninput: move |evt| {
@@ -879,6 +925,14 @@ fn TableRow(
                                 }
                             }
                         }
+                        if has_enum_options(&snapshot, col) {
+                            datalist {
+                                id: enum_list_id(col),
+                                for option in enum_values_for_column(&snapshot, col) {
+                                    option { value: "{option}" }
+                                }
+                            }
+                        }
                     }
                 } else {
                     td {
@@ -887,16 +941,17 @@ fn TableRow(
                             col,
                             &search_query,
                             formula_columns.contains(col),
-                            selected_range
-                                .read()
-                                .as_ref()
-                                .map(|range| {
-                                    range.contains(CellPoint {
-                                        row: display_index,
-                                        column: column_index,
-                                    })
-                                })
-                                .unwrap_or(false),
+                            range_contains_cell(
+                                selected_range.read().as_ref().copied(),
+                                display_index,
+                                column_index,
+                            ),
+                            autofill_preview_contains_cell(
+                                autofill_source.read().as_ref().copied(),
+                                autofill_target.read().as_ref().copied(),
+                                display_index,
+                                column_index,
+                            ),
                             column_index < frozen_count,
                         ),
                         id: format!("cell-{}-{}", data_index, sanitize_id(col)),
@@ -935,6 +990,15 @@ fn TableRow(
                             }
                         },
                         onmouseenter: move |_| {
+                            if *autofill_dragging.read() {
+                                autofill_target.set(Some(CellPoint {
+                                    row: display_index,
+                                    column: column_index,
+                                }));
+                                drag_moved.set(true);
+                                return;
+                            }
+
                             if !*drag_selecting.read() {
                                 return;
                             }
@@ -971,6 +1035,9 @@ fn TableRow(
                                 .cell_formula(data_index, col)
                                 .map(|formula| format!("={formula}"));
                             move |evt: Event<MouseData>| {
+                                if *autofill_dragging.read() {
+                                    return;
+                                }
                                 selected_column.set(Some(col_name.clone()));
                                 context_menu.set(None);
 
@@ -1051,6 +1118,37 @@ fn TableRow(
                             }
                         },
                         "{row.get(col).map(data_model::display_value).unwrap_or_default()}"
+                        if is_autofill_handle_cell(
+                            selected_range.read().as_ref().copied(),
+                            display_index,
+                            column_index,
+                        ) {
+                            div {
+                                class: "fill-handle",
+                                id: format!("fill-handle-{}-{}", display_index, column_index),
+                                onmousedown: move |evt: Event<MouseData>| {
+                                    if evt.trigger_button() != Some(MouseButton::Primary) {
+                                        return;
+                                    }
+                                    evt.prevent_default();
+                                    evt.stop_propagation();
+                                    let current = selected_range.read().as_ref().copied();
+                                    if current.is_none() {
+                                        return;
+                                    }
+                                    autofill_source.set(current);
+                                    autofill_target.set(Some(CellPoint {
+                                        row: display_index,
+                                        column: column_index,
+                                    }));
+                                    autofill_dragging.set(true);
+                                    drag_selecting.set(false);
+                                    drag_moved.set(true);
+                                    editing.set(None);
+                                    context_menu.set(None);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1070,16 +1168,16 @@ fn sort_indicator_for_column(
     match sort_spec.as_ref() {
         Some(spec) if spec.column == col => match spec.order {
             SortOrder::Asc => SortIndicator {
-                symbol: "▴",
+                symbol: "^",
                 class_suffix: "asc",
             },
             SortOrder::Desc => SortIndicator {
-                symbol: "▾",
+                symbol: "v",
                 class_suffix: "desc",
             },
         },
         _ => SortIndicator {
-            symbol: "↕",
+            symbol: "-",
             class_suffix: "none",
         },
     }
@@ -1106,6 +1204,7 @@ fn cell_class(
     search_query: &str,
     has_formula: bool,
     in_selected_range: bool,
+    in_autofill_preview: bool,
     frozen: bool,
 ) -> String {
     let mut class_name = if has_formula {
@@ -1120,6 +1219,9 @@ fn cell_class(
     }
     if in_selected_range {
         class_name = join_classes(&class_name, "in-range");
+    }
+    if in_autofill_preview {
+        class_name = join_classes(&class_name, "autofill-preview");
     }
     if frozen {
         class_name = join_classes(&class_name, "frozen-col");
@@ -1194,6 +1296,240 @@ fn selected_cell_targets(
     } else {
         targets
     }
+}
+
+fn range_contains_cell(selected_range: Option<CellRange>, row: usize, column: usize) -> bool {
+    selected_range
+        .map(|range| range.contains(CellPoint { row, column }))
+        .unwrap_or(false)
+}
+
+fn is_autofill_handle_cell(selected_range: Option<CellRange>, row: usize, column: usize) -> bool {
+    let Some(range) = selected_range else {
+        return false;
+    };
+    let (_, row_end, _, column_end) = range.bounds();
+    row == row_end && column == column_end
+}
+
+fn autofill_preview_contains_cell(
+    source: Option<CellRange>,
+    target: Option<CellPoint>,
+    row: usize,
+    column: usize,
+) -> bool {
+    let point = CellPoint { row, column };
+    let Some(source_range) = source else {
+        return false;
+    };
+    let Some(expanded) = autofill_expanded_range(source, target) else {
+        return false;
+    };
+    expanded.contains(point) && !source_range.contains(point)
+}
+
+fn autofill_expanded_range(
+    source: Option<CellRange>,
+    target: Option<CellPoint>,
+) -> Option<CellRange> {
+    let source_range = source?;
+    let target_point = target?;
+    let (src_row_start, src_row_end, src_col_start, src_col_end) = source_range.bounds();
+    Some(CellRange {
+        anchor: CellPoint {
+            row: src_row_start.min(target_point.row),
+            column: src_col_start.min(target_point.column),
+        },
+        focus: CellPoint {
+            row: src_row_end.max(target_point.row),
+            column: src_col_end.max(target_point.column),
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_autofill_drag(
+    mut data: Signal<TableState>,
+    file_path: Signal<Option<PathBuf>>,
+    mut error_message: Signal<Option<String>>,
+    mut selected_range: Signal<Option<CellRange>>,
+    mut autofill_dragging: Signal<bool>,
+    mut autofill_source: Signal<Option<CellRange>>,
+    mut autofill_target: Signal<Option<CellPoint>>,
+    columns: &[String],
+    visible_rows: &[usize],
+) {
+    if !*autofill_dragging.read() {
+        return;
+    }
+
+    let source = autofill_source.read().as_ref().copied();
+    let target = autofill_target.read().as_ref().copied();
+    if let Some(expanded) = autofill_expanded_range(source, target) {
+        selected_range.set(Some(expanded));
+    }
+
+    let snapshot = data.read().clone();
+    let plan = build_autofill_plan(&snapshot, columns, visible_rows, source, target);
+    drop(snapshot);
+
+    let changed = if plan.edits.is_empty() {
+        0
+    } else {
+        data.with_mut(|state| state.apply_cell_edits(plan.edits))
+    };
+
+    if changed > 0 {
+        if plan.touches_formula {
+            persist_sidecar_if_possible(data, file_path, error_message);
+        } else {
+            error_message.set(None);
+        }
+    } else {
+        error_message.set(None);
+    }
+
+    autofill_dragging.set(false);
+    autofill_source.set(None);
+    autofill_target.set(None);
+}
+
+fn build_autofill_plan(
+    snapshot: &TableState,
+    columns: &[String],
+    visible_rows: &[usize],
+    source: Option<CellRange>,
+    target: Option<CellPoint>,
+) -> AutoFillPlan {
+    let mut plan = AutoFillPlan {
+        edits: Vec::new(),
+        touches_formula: false,
+    };
+
+    let Some(source_range) = source else {
+        return plan;
+    };
+    let Some(expanded_range) = autofill_expanded_range(source, target) else {
+        return plan;
+    };
+
+    let (src_row_start, src_row_end, src_col_start, src_col_end) = source_range.bounds();
+    let (full_row_start, full_row_end, full_col_start, full_col_end) = expanded_range.bounds();
+    let src_rows = src_row_end - src_row_start + 1;
+    let src_cols = src_col_end - src_col_start + 1;
+    let single_source = src_rows == 1 && src_cols == 1;
+
+    for display_row in full_row_start..=full_row_end {
+        for display_col in full_col_start..=full_col_end {
+            let target_point = CellPoint {
+                row: display_row,
+                column: display_col,
+            };
+            if source_range.contains(target_point) {
+                continue;
+            }
+
+            let Some(target_row_index) = visible_rows.get(display_row).copied() else {
+                continue;
+            };
+            let Some(target_column_name) = columns.get(display_col).cloned() else {
+                continue;
+            };
+
+            let source_display_row =
+                src_row_start + wrap_index(display_row as isize - src_row_start as isize, src_rows);
+            let source_display_col =
+                src_col_start + wrap_index(display_col as isize - src_col_start as isize, src_cols);
+            let Some(source_row_index) = visible_rows.get(source_display_row).copied() else {
+                continue;
+            };
+            let Some(source_column_name) = columns.get(source_display_col) else {
+                continue;
+            };
+
+            if let Some(source_formula) =
+                snapshot.cell_formula(source_row_index, source_column_name)
+            {
+                plan.touches_formula = true;
+                plan.edits.push(CellEdit {
+                    row_index: target_row_index,
+                    column: target_column_name,
+                    kind: CellEditKind::Formula(source_formula),
+                });
+                continue;
+            }
+
+            let Some(mut source_value) = snapshot.cell_value(source_row_index, source_column_name)
+            else {
+                continue;
+            };
+
+            if let Some(delta) =
+                increment_delta_for_target(single_source, source_range, target_point)
+            {
+                if let Some(incremented) = increment_numeric_value(&source_value, delta) {
+                    source_value = incremented;
+                }
+            }
+
+            plan.edits.push(CellEdit {
+                row_index: target_row_index,
+                column: target_column_name,
+                kind: CellEditKind::Value(source_value),
+            });
+        }
+    }
+
+    plan
+}
+
+fn wrap_index(offset: isize, span: usize) -> usize {
+    offset.rem_euclid(span as isize) as usize
+}
+
+fn increment_delta_for_target(
+    single_source: bool,
+    source_range: CellRange,
+    target_point: CellPoint,
+) -> Option<isize> {
+    if !single_source {
+        return None;
+    }
+
+    let (src_row_start, _, src_col_start, _) = source_range.bounds();
+    if target_point.column == src_col_start && target_point.row != src_row_start {
+        return Some(target_point.row as isize - src_row_start as isize);
+    }
+    if target_point.row == src_row_start && target_point.column != src_col_start {
+        return Some(target_point.column as isize - src_col_start as isize);
+    }
+    None
+}
+
+fn increment_numeric_value(value: &Value, delta: isize) -> Option<Value> {
+    let Value::Number(number) = value else {
+        return None;
+    };
+    let base = number.as_f64()?;
+    let next = base + delta as f64;
+    json_number_from_f64(next).map(Value::Number)
+}
+
+fn json_number_from_f64(value: f64) -> Option<serde_json::Number> {
+    if !value.is_finite() {
+        return None;
+    }
+
+    if value.fract() == 0.0 {
+        if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+            return Some((value as i64).into());
+        }
+        if value >= 0.0 && value <= u64::MAX as f64 {
+            return Some((value as u64).into());
+        }
+    }
+
+    serde_json::Number::from_f64(value)
 }
 
 fn commit_edit(
@@ -1271,6 +1607,30 @@ fn persist_sidecar_if_possible(
         error_message.set(Some(err.to_string()));
     } else {
         error_message.set(None);
+    }
+}
+
+fn enum_values_for_column(snapshot: &TableState, column: &str) -> Vec<String> {
+    snapshot
+        .validation_rule(column)
+        .and_then(|rule| rule.enum_values.as_ref())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn has_enum_options(snapshot: &TableState, column: &str) -> bool {
+    !enum_values_for_column(snapshot, column).is_empty()
+}
+
+fn enum_list_id(column: &str) -> String {
+    format!("enum-options-{}", sanitize_id(column))
+}
+
+fn editing_enum_list_id(snapshot: &TableState, column: &str) -> String {
+    if has_enum_options(snapshot, column) {
+        enum_list_id(column)
+    } else {
+        String::new()
     }
 }
 

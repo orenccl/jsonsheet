@@ -20,6 +20,19 @@ pub struct SortSpec {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum CellEditKind {
+    Value(Value),
+    Formula(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellEdit {
+    pub row_index: usize,
+    pub column: String,
+    pub kind: CellEditKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct HistoryEntry {
     data: TableData,
     jsheet_meta: JSheetMeta,
@@ -332,6 +345,74 @@ impl TableState {
         self.push_undo_snapshot();
         self.sort_spec = None;
         data_model::set_cell_value(&mut self.data, row_index, column, value)
+    }
+
+    pub fn apply_cell_edits(&mut self, edits: Vec<CellEdit>) -> usize {
+        if edits.is_empty() {
+            return 0;
+        }
+
+        let mut next_data = self.data.clone();
+        let mut next_meta = self.jsheet_meta.clone();
+        let mut changed = 0usize;
+
+        for edit in edits {
+            let column = edit.column.trim();
+            if column.is_empty() {
+                continue;
+            }
+
+            match edit.kind {
+                CellEditKind::Formula(formula) => {
+                    if edit.row_index >= next_data.len() {
+                        continue;
+                    }
+
+                    let Some(normalized) = JSheetMeta::normalize_formula(&formula) else {
+                        continue;
+                    };
+
+                    if next_meta.formula_for_cell(edit.row_index, column)
+                        == Some(normalized.as_str())
+                    {
+                        continue;
+                    }
+
+                    if next_meta.set_formula_for_cell(edit.row_index, column, normalized) {
+                        changed += 1;
+                    }
+                }
+                CellEditKind::Value(value) => {
+                    let Some(row) = next_data.get_mut(edit.row_index) else {
+                        continue;
+                    };
+
+                    let Some(coerced) = next_meta.coerce_value_for_column(column, &value, None)
+                    else {
+                        continue;
+                    };
+
+                    let had_formula = next_meta.formula_for_cell(edit.row_index, column).is_some();
+                    if row.get(column) == Some(&coerced) && !had_formula {
+                        continue;
+                    }
+
+                    row.insert(column.to_string(), coerced);
+                    next_meta.remove_formula_for_cell(edit.row_index, column);
+                    changed += 1;
+                }
+            }
+        }
+
+        if changed == 0 {
+            return 0;
+        }
+
+        self.push_undo_snapshot();
+        self.sort_spec = None;
+        self.data = next_data;
+        self.jsheet_meta = next_meta;
+        changed
     }
 
     pub fn add_row(&mut self) -> bool {
