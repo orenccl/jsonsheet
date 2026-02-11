@@ -5,13 +5,13 @@ use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::{Key, *};
 use serde_json::Value;
 
-use crate::io::jsheet_io;
 use crate::state::data_model::{self, Row};
 use crate::state::i18n::{self, Language};
 use crate::state::jsheet::{
     ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, ParsedCondRule, SummaryKind,
 };
 use crate::state::table_state::{CellEdit, CellEditKind, SortOrder, TableState};
+use crate::ui::actions;
 
 #[derive(Clone, PartialEq)]
 struct EditingCell {
@@ -24,6 +24,8 @@ struct EditingCell {
 struct ContextCellMenu {
     row: usize,
     column: String,
+    x: f64,
+    y: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,8 +84,9 @@ pub fn Table(
     error_message: Signal<Option<String>>,
     selected_row: Signal<Option<usize>>,
     selected_column: Signal<Option<String>>,
+    show_meta_row: Signal<bool>,
 ) -> Element {
-    let editing = use_signal::<Option<EditingCell>>(|| None);
+    let mut editing = use_signal::<Option<EditingCell>>(|| None);
     let mut context_menu = use_signal::<Option<ContextCellMenu>>(|| None);
     let context_formula = use_signal(String::new);
     let context_text_color = use_signal(|| "#1a1a1a".to_string());
@@ -109,9 +112,24 @@ pub fn Table(
     let current_language = *language.read();
 
     if columns.is_empty() {
-        let empty_message = i18n::tr(current_language, "table.empty_message");
+        let empty_hint = i18n::tr(current_language, "table.empty_hint");
+        let open_label = i18n::tr(current_language, "toolbar.open");
         return rsx! {
-            p { class: "empty-message", id: "empty-message", "{empty_message}" }
+            div { class: "empty-state", id: "empty-state",
+                div { class: "empty-state-icon", "\u{1F4C4}" }
+                h2 { class: "empty-state-title", "JsonSheet" }
+                p { class: "empty-state-hint", "{empty_hint}" }
+                button {
+                    class: "empty-state-btn",
+                    id: "btn-empty-open",
+                    onclick: move |_| {
+                        spawn(async move {
+                            actions::open_file(data, language, file_path, error_message, selected_row, selected_column).await;
+                        });
+                    },
+                    "\u{1F4C2} {open_label}"
+                }
+            }
         };
     }
 
@@ -119,8 +137,87 @@ pub fn Table(
         div {
             class: "table-container",
             id: "table-container",
+            tabindex: "0",
             onclick: move |_| {
                 context_menu.set(None);
+            },
+            onkeydown: {
+                let columns = columns.clone();
+                let visible_rows = visible_rows.clone();
+                move |evt: Event<KeyboardData>| {
+                    let col_count = columns.len();
+                    let row_count = visible_rows.len();
+                    if col_count == 0 || row_count == 0 {
+                        return;
+                    }
+
+                    // If editing, handle edit-specific keys
+                    if editing.read().is_some() {
+                        if evt.key() == Key::Escape {
+                            editing.set(None);
+                        }
+                        return;
+                    }
+
+                    match evt.key() {
+                        Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight => {
+                            evt.prevent_default();
+                            let (dr, dc): (isize, isize) = match evt.key() {
+                                Key::ArrowUp => (-1, 0),
+                                Key::ArrowDown => (1, 0),
+                                Key::ArrowLeft => (0, -1),
+                                Key::ArrowRight => (0, 1),
+                                _ => (0, 0),
+                            };
+                            move_selection(
+                                selected_range, selected_row, selected_column,
+                                dr, dc, row_count, col_count, &columns, &visible_rows,
+                            );
+                        }
+                        Key::Enter | Key::F2 => {
+                            evt.prevent_default();
+                            enter_edit_from_selection(
+                                selected_range, editing, data,
+                                &columns, &visible_rows,
+                            );
+                        }
+                        Key::Delete => {
+                            evt.prevent_default();
+                            delete_selected_cells(
+                                data, language, file_path, error_message,
+                                selected_range, &columns, &visible_rows,
+                            );
+                        }
+                        Key::Tab => {
+                            evt.prevent_default();
+                            let dc: isize = if evt.modifiers().shift() { -1 } else { 1 };
+                            move_selection(
+                                selected_range, selected_row, selected_column,
+                                0, dc, row_count, col_count, &columns, &visible_rows,
+                            );
+                        }
+                        _ => {
+                            // Start typing to edit
+                            if let Key::Character(ref c) = evt.key() {
+                                if !evt.modifiers().ctrl() && !evt.modifiers().meta() && !evt.modifiers().alt()
+                                    && c.len() == 1
+                                {
+                                    // Start editing with the typed character
+                                    if let Some(range) = selected_range.read().as_ref().copied() {
+                                        let point = range.anchor;
+                                        if let (Some(&data_row), Some(col_name)) = (visible_rows.get(point.row), columns.get(point.column)) {
+                                            editing.set(Some(EditingCell {
+                                                row: data_row,
+                                                column: col_name.clone(),
+                                                draft: c.clone(),
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             },
             onmouseup: {
                 let columns = columns.clone();
@@ -204,21 +301,23 @@ pub fn Table(
                             }
                         }
                     }
-                    tr { class: "column-meta-row", id: "column-meta-row",
-                        th {
-                            class: if frozen_count > 0 { "row-number meta-label frozen-col" } else { "row-number meta-label" },
-                            style: if frozen_count > 0 { "left: 0px;" } else { "" },
-                            "meta"
-                        }
-                        for (col_idx, col) in columns.iter().enumerate() {
-                            ColumnMetaCell {
-                                data,
-                                language,
-                                file_path,
-                                error_message,
-                                column: col.clone(),
-                                frozen: col_idx < frozen_count,
-                                frozen_left: frozen_left_px(col_idx, frozen_count),
+                    if *show_meta_row.read() {
+                        tr { class: "column-meta-row", id: "column-meta-row",
+                            th {
+                                class: if frozen_count > 0 { "row-number meta-label frozen-col" } else { "row-number meta-label" },
+                                style: if frozen_count > 0 { "left: 0px;" } else { "" },
+                                "meta"
+                            }
+                            for (col_idx, col) in columns.iter().enumerate() {
+                                ColumnMetaCell {
+                                    data,
+                                    language,
+                                    file_path,
+                                    error_message,
+                                    column: col.clone(),
+                                    frozen: col_idx < frozen_count,
+                                    frozen_left: frozen_left_px(col_idx, frozen_count),
+                                }
                             }
                         }
                     }
@@ -250,6 +349,7 @@ pub fn Table(
                                 autofill_target,
                                 search_query: search_query.clone(),
                                 frozen_count,
+                                visible_row_count: visible_rows.len(),
                             }
                         }
                     }
@@ -289,9 +389,50 @@ pub fn Table(
                     context_cond_color,
                     row_index: menu.row,
                     column: menu.column,
+                    menu_x: menu.x,
+                    menu_y: menu.y,
                     selected_range,
                     columns: columns.clone(),
                     visible_rows: visible_rows.clone(),
+                }
+            }
+        }
+        {
+            let total_rows = snapshot.data().len();
+            let visible_count = visible_rows.len();
+            let has_filter = snapshot.filter_column().is_some();
+            let row_count_label = i18n::tr(current_language, "status.row_count");
+            let visible_label = i18n::tr(current_language, "status.visible");
+            let filter_active_label = i18n::tr(current_language, "status.filter_active");
+            let selection_label = i18n::tr(current_language, "status.selection");
+
+            let selection_text = if let Some(range) = selected_range.read().as_ref() {
+                let (r1, r2, c1, c2) = range.bounds();
+                if r1 == r2 && c1 == c2 {
+                    if let Some(col_name) = columns.get(c1) {
+                        format!("{selection_label}: R{}:{col_name}", r1 + 1)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    format!("{selection_label}: R{}-R{}, C{}-C{}", r1 + 1, r2 + 1, c1 + 1, c2 + 1)
+                }
+            } else {
+                String::new()
+            };
+
+            rsx! {
+                div { class: "status-bar", id: "status-bar",
+                    span { class: "status-item", "{row_count_label}: {total_rows}" }
+                    if total_rows != visible_count {
+                        span { class: "status-item", "{visible_label}: {visible_count}" }
+                    }
+                    if has_filter {
+                        span { class: "status-item status-filter-active", "{filter_active_label}" }
+                    }
+                    if !selection_text.is_empty() {
+                        span { class: "status-item", "{selection_text}" }
+                    }
                 }
             }
         }
@@ -363,7 +504,7 @@ fn ColumnMetaCell(
                             data.with_mut(|state| {
                                 state.set_column_type(&column_name, parse_column_type(&value));
                             });
-                            persist_sidecar_if_possible(data, file_path, error_message);
+                            actions::persist_sidecar_if_possible(data, file_path, error_message);
                         }
                     },
                     option { value: "none", "{option_none}" }
@@ -384,7 +525,7 @@ fn ColumnMetaCell(
                             data.with_mut(|state| {
                                 state.set_summary_kind(&column_name, parse_summary_kind(&value));
                             });
-                            persist_sidecar_if_possible(data, file_path, error_message);
+                            actions::persist_sidecar_if_possible(data, file_path, error_message);
                         }
                     },
                     option { value: "none", "{option_none}" }
@@ -407,7 +548,7 @@ fn ColumnMetaCell(
                                     let next = !state.is_comment_column(&column_name);
                                     state.set_comment_column(&column_name, next);
                                 });
-                                persist_sidecar_if_possible(data, file_path, error_message);
+                                actions::persist_sidecar_if_possible(data, file_path, error_message);
                             }
                         }
                     }
@@ -446,7 +587,7 @@ fn ColumnMetaCell(
                                             let is_empty = rule.min.is_none() && rule.max.is_none() && rule.enum_values.is_none();
                                             state.set_validation_rule(&col, if is_empty { None } else { Some(rule) });
                                         });
-                                        persist_sidecar_if_possible(data, file_path, error_message);
+                                        actions::persist_sidecar_if_possible(data, file_path, error_message);
                                     }
                                 }
                             }
@@ -466,7 +607,7 @@ fn ColumnMetaCell(
                                             let is_empty = rule.min.is_none() && rule.max.is_none() && rule.enum_values.is_none();
                                             state.set_validation_rule(&col, if is_empty { None } else { Some(rule) });
                                         });
-                                        persist_sidecar_if_possible(data, file_path, error_message);
+                                        actions::persist_sidecar_if_possible(data, file_path, error_message);
                                     }
                                 }
                             }
@@ -490,7 +631,7 @@ fn ColumnMetaCell(
                                             let is_empty = rule.min.is_none() && rule.max.is_none() && rule.enum_values.is_none();
                                             state.set_validation_rule(&col, if is_empty { None } else { Some(rule) });
                                         });
-                                        persist_sidecar_if_possible(data, file_path, error_message);
+                                        actions::persist_sidecar_if_possible(data, file_path, error_message);
                                     }
                                 }
                             }
@@ -516,6 +657,8 @@ fn CellContextMenu(
     context_cond_color: Signal<String>,
     row_index: usize,
     column: String,
+    menu_x: f64,
+    menu_y: f64,
     selected_range: Signal<Option<CellRange>>,
     columns: Vec<String>,
     visible_rows: Vec<usize>,
@@ -534,6 +677,7 @@ fn CellContextMenu(
         div {
             class: "cell-context-menu",
             id: format!("context-menu-{}-{}", row_index, sanitize_id(&column)),
+            style: format!("left: {menu_x}px; top: {menu_y}px;"),
             onclick: move |evt| evt.stop_propagation(),
             div { class: "ctx-title", "R{row_index + 1} / {column}" }
 
@@ -592,7 +736,7 @@ fn CellContextMenu(
                             });
 
                             if changed {
-                                persist_sidecar_if_possible(data, file_path, error_message);
+                                actions::persist_sidecar_if_possible(data, file_path, error_message);
                             } else {
                                 error_message.set(None);
                             }
@@ -626,7 +770,7 @@ fn CellContextMenu(
                             });
                             context_formula.set(String::new());
                             if changed {
-                                persist_sidecar_if_possible(data, file_path, error_message);
+                                actions::persist_sidecar_if_possible(data, file_path, error_message);
                             } else {
                                 error_message.set(None);
                             }
@@ -685,7 +829,7 @@ fn CellContextMenu(
                                     );
                                 }
                             });
-                            persist_sidecar_if_possible(data, file_path, error_message);
+                            actions::persist_sidecar_if_possible(data, file_path, error_message);
                         }
                     },
                     "{apply_style_label}"
@@ -712,7 +856,7 @@ fn CellContextMenu(
                             });
                             context_text_color.set("#1a1a1a".to_string());
                             context_bg_color.set("#ffffff".to_string());
-                            persist_sidecar_if_possible(data, file_path, error_message);
+                            actions::persist_sidecar_if_possible(data, file_path, error_message);
                         }
                     },
                     "{clear_style_label}"
@@ -759,7 +903,7 @@ fn CellContextMenu(
                                     move |_| {
                                         let removed = data.with_mut(|state| state.remove_conditional_format(idx));
                                         if removed {
-                                            persist_sidecar_if_possible(data, file_path, error_message);
+                                            actions::persist_sidecar_if_possible(data, file_path, error_message);
                                         }
                                     }
                                 },
@@ -809,7 +953,7 @@ fn CellContextMenu(
                                         });
                                     });
                                     context_cond_rule.set(String::new());
-                                    persist_sidecar_if_possible(data, file_path, error_message);
+                                    actions::persist_sidecar_if_possible(data, file_path, error_message);
                                 }
                             },
                             "{add_cond_label}"
@@ -855,6 +999,7 @@ fn TableRow(
     autofill_target: Signal<Option<CellPoint>>,
     search_query: String,
     frozen_count: usize,
+    visible_row_count: usize,
 ) -> Element {
     let snapshot = data.read().clone();
     let formula_columns: BTreeSet<String> = columns
@@ -917,11 +1062,31 @@ fn TableRow(
                             onblur: move |_| {
                                 commit_edit(data, language, file_path, error_message, editing);
                             },
-                            onkeydown: move |evt| {
-                                match evt.key() {
-                                    Key::Enter => commit_edit(data, language, file_path, error_message, editing),
-                                    Key::Escape => editing.set(None),
-                                    _ => {}
+                            onkeydown: {
+                                let columns = columns.clone();
+                                let visible_rows_count = visible_row_count;
+                                move |evt: Event<KeyboardData>| {
+                                    match evt.key() {
+                                        Key::Enter => {
+                                            commit_edit(data, language, file_path, error_message, editing);
+                                            // Move down
+                                            move_selection(
+                                                selected_range, selected_row, selected_column,
+                                                1, 0, visible_rows_count, columns.len(), &columns, &[],
+                                            );
+                                        }
+                                        Key::Tab => {
+                                            evt.prevent_default();
+                                            commit_edit(data, language, file_path, error_message, editing);
+                                            let dc: isize = if evt.modifiers().shift() { -1 } else { 1 };
+                                            move_selection(
+                                                selected_range, selected_row, selected_column,
+                                                0, dc, visible_rows_count, columns.len(), &columns, &[],
+                                            );
+                                        }
+                                        Key::Escape => editing.set(None),
+                                        _ => {}
+                                    }
                                 }
                             }
                         }
@@ -953,6 +1118,11 @@ fn TableRow(
                                 column_index,
                             ),
                             column_index < frozen_count,
+                            is_single_selected_cell(
+                                selected_range.read().as_ref().copied(),
+                                display_index,
+                                column_index,
+                            ),
                         ),
                         id: format!("cell-{}-{}", data_index, sanitize_id(col)),
                         style: "{frozen_left_style(column_index, frozen_count)}{snapshot.cell_inline_style(data_index, col)}",
@@ -1027,17 +1197,11 @@ fn TableRow(
                         },
                         onclick: {
                             let col_name = col.clone();
-                            let display_for_edit = row
-                                .get(col)
-                                .map(data_model::display_value)
-                                .unwrap_or_default();
-                            let formula_for_edit = snapshot
-                                .cell_formula(data_index, col)
-                                .map(|formula| format!("={formula}"));
                             move |evt: Event<MouseData>| {
                                 if *autofill_dragging.read() {
                                     return;
                                 }
+                                selected_row.set(Some(data_index));
                                 selected_column.set(Some(col_name.clone()));
                                 context_menu.set(None);
 
@@ -1067,6 +1231,28 @@ fn TableRow(
                                     return;
                                 }
 
+                                selected_range.set(Some(CellRange::single(point)));
+                                editing.set(None);
+                            }
+                        },
+                        ondoubleclick: {
+                            let col_name = col.clone();
+                            let display_for_edit = row
+                                .get(col)
+                                .map(data_model::display_value)
+                                .unwrap_or_default();
+                            let formula_for_edit = snapshot
+                                .cell_formula(data_index, col)
+                                .map(|formula| format!("={formula}"));
+                            move |_| {
+                                selected_row.set(Some(data_index));
+                                selected_column.set(Some(col_name.clone()));
+                                context_menu.set(None);
+
+                                let point = CellPoint {
+                                    row: display_index,
+                                    column: column_index,
+                                };
                                 selected_range.set(Some(CellRange::single(point)));
                                 let draft = formula_for_edit
                                     .clone()
@@ -1111,9 +1297,12 @@ fn TableRow(
                                     .set(style.color.unwrap_or_else(|| "#1a1a1a".to_string()));
                                 context_bg_color
                                     .set(style.background.unwrap_or_else(|| "#ffffff".to_string()));
+                                let coords = evt.client_coordinates();
                                 context_menu.set(Some(ContextCellMenu {
                                     row: data_index,
                                     column: col_name.clone(),
+                                    x: coords.x,
+                                    y: coords.y,
                                 }));
                             }
                         },
@@ -1156,6 +1345,114 @@ fn TableRow(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn move_selection(
+    mut selected_range: Signal<Option<CellRange>>,
+    mut selected_row: Signal<Option<usize>>,
+    mut selected_column: Signal<Option<String>>,
+    dr: isize,
+    dc: isize,
+    row_count: usize,
+    col_count: usize,
+    columns: &[String],
+    visible_rows: &[usize],
+) {
+    let current = selected_range
+        .read()
+        .as_ref()
+        .copied()
+        .map(|r| r.anchor)
+        .unwrap_or(CellPoint { row: 0, column: 0 });
+
+    let new_row = (current.row as isize + dr).clamp(0, row_count as isize - 1) as usize;
+    let new_col = (current.column as isize + dc).clamp(0, col_count as isize - 1) as usize;
+
+    let point = CellPoint {
+        row: new_row,
+        column: new_col,
+    };
+    selected_range.set(Some(CellRange::single(point)));
+
+    if let Some(col_name) = columns.get(new_col) {
+        selected_column.set(Some(col_name.clone()));
+    }
+    if let Some(&data_row) = visible_rows.get(new_row) {
+        selected_row.set(Some(data_row));
+    }
+}
+
+fn enter_edit_from_selection(
+    selected_range: Signal<Option<CellRange>>,
+    mut editing: Signal<Option<EditingCell>>,
+    data: Signal<TableState>,
+    columns: &[String],
+    visible_rows: &[usize],
+) {
+    let Some(range) = selected_range.read().as_ref().copied() else {
+        return;
+    };
+    let point = range.anchor;
+    let Some(&data_row) = visible_rows.get(point.row) else {
+        return;
+    };
+    let Some(col_name) = columns.get(point.column) else {
+        return;
+    };
+
+    let snapshot = data.read();
+    let draft = snapshot
+        .cell_formula(data_row, col_name)
+        .map(|f| format!("={f}"))
+        .unwrap_or_else(|| {
+            snapshot
+                .cell_value(data_row, col_name)
+                .map(|v| data_model::display_value(&v))
+                .unwrap_or_default()
+        });
+
+    editing.set(Some(EditingCell {
+        row: data_row,
+        column: col_name.clone(),
+        draft,
+    }));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn delete_selected_cells(
+    mut data: Signal<TableState>,
+    _language: Signal<Language>,
+    _file_path: Signal<Option<PathBuf>>,
+    mut error_message: Signal<Option<String>>,
+    selected_range: Signal<Option<CellRange>>,
+    columns: &[String],
+    visible_rows: &[usize],
+) {
+    let Some(range) = selected_range.read().as_ref().copied() else {
+        return;
+    };
+    let (row_start, row_end, col_start, col_end) = range.bounds();
+    let mut edits = Vec::new();
+    for display_row in row_start..=row_end {
+        let Some(&data_row) = visible_rows.get(display_row) else {
+            continue;
+        };
+        for col_idx in col_start..=col_end {
+            let Some(col_name) = columns.get(col_idx) else {
+                continue;
+            };
+            edits.push(CellEdit {
+                row_index: data_row,
+                column: col_name.clone(),
+                kind: CellEditKind::Value(Value::Null),
+            });
+        }
+    }
+    if !edits.is_empty() {
+        data.with_mut(|state| state.apply_cell_edits(edits));
+        error_message.set(None);
+    }
+}
+
 struct SortIndicator {
     symbol: &'static str,
     class_suffix: &'static str,
@@ -1168,16 +1465,16 @@ fn sort_indicator_for_column(
     match sort_spec.as_ref() {
         Some(spec) if spec.column == col => match spec.order {
             SortOrder::Asc => SortIndicator {
-                symbol: "^",
+                symbol: "\u{25B2}",
                 class_suffix: "asc",
             },
             SortOrder::Desc => SortIndicator {
-                symbol: "v",
+                symbol: "\u{25BC}",
                 class_suffix: "desc",
             },
         },
         _ => SortIndicator {
-            symbol: "-",
+            symbol: "\u{25BD}",
             class_suffix: "none",
         },
     }
@@ -1198,6 +1495,7 @@ fn header_class(col: &str, selected_column: &Signal<Option<String>>) -> String {
     selected_class.to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cell_class(
     row: &Row,
     column: &str,
@@ -1206,6 +1504,7 @@ fn cell_class(
     in_selected_range: bool,
     in_autofill_preview: bool,
     frozen: bool,
+    is_selected_cell: bool,
 ) -> String {
     let mut class_name = if has_formula {
         "cell formula-cell"
@@ -1225,6 +1524,9 @@ fn cell_class(
     }
     if frozen {
         class_name = join_classes(&class_name, "frozen-col");
+    }
+    if is_selected_cell {
+        class_name = join_classes(&class_name, "selected-cell");
     }
 
     class_name
@@ -1301,6 +1603,14 @@ fn selected_cell_targets(
 fn range_contains_cell(selected_range: Option<CellRange>, row: usize, column: usize) -> bool {
     selected_range
         .map(|range| range.contains(CellPoint { row, column }))
+        .unwrap_or(false)
+}
+
+fn is_single_selected_cell(selected_range: Option<CellRange>, row: usize, column: usize) -> bool {
+    selected_range
+        .map(|range| {
+            range.anchor == range.focus && range.anchor.row == row && range.anchor.column == column
+        })
         .unwrap_or(false)
 }
 
@@ -1381,7 +1691,7 @@ fn finish_autofill_drag(
 
     if changed > 0 {
         if plan.touches_formula {
-            persist_sidecar_if_possible(data, file_path, error_message);
+            actions::persist_sidecar_if_possible(data, file_path, error_message);
         } else {
             error_message.set(None);
         }
@@ -1566,7 +1876,7 @@ fn commit_edit(
         match result {
             CommitResult::Applied => {
                 if sidecar_changed {
-                    persist_sidecar_if_possible(data, file_path, error_message);
+                    actions::persist_sidecar_if_possible(data, file_path, error_message);
                 } else {
                     error_message.set(None);
                 }
@@ -1585,29 +1895,6 @@ fn commit_edit(
     }
 
     editing.set(None);
-}
-
-fn persist_sidecar_if_possible(
-    data: Signal<TableState>,
-    file_path: Signal<Option<PathBuf>>,
-    mut error_message: Signal<Option<String>>,
-) {
-    let path = {
-        let read = file_path.read();
-        let Some(path) = read.as_ref() else {
-            return;
-        };
-        path.clone()
-    };
-
-    let state = data.read();
-    let meta_for_save = state.jsheet_meta_for_save();
-    let current_data = state.data();
-    if let Err(err) = jsheet_io::save_sidecar_for_json(&path, &meta_for_save, current_data) {
-        error_message.set(Some(err.to_string()));
-    } else {
-        error_message.set(None);
-    }
 }
 
 fn enum_values_for_column(snapshot: &TableState, column: &str) -> Vec<String> {

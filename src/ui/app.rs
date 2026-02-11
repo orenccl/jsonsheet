@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::io::jsheet_io;
 use crate::state::i18n::{self, Language};
 use crate::state::table_state::TableState;
+use crate::ui::actions;
 use crate::ui::table::Table;
 use crate::ui::toolbar::Toolbar;
 
@@ -32,14 +33,16 @@ impl Default for SheetTabState {
 
 #[component]
 pub fn App() -> Element {
-    let data = use_signal(TableState::new);
+    let mut data = use_signal(TableState::new);
     let language = use_signal(Language::default);
     let file_path = use_signal::<Option<PathBuf>>(|| None);
-    let error_message = use_signal::<Option<String>>(|| None);
+    let mut error_message = use_signal::<Option<String>>(|| None);
     let mut selected_row = use_signal::<Option<usize>>(|| None);
     let mut selected_column = use_signal::<Option<String>>(|| None);
     let tabs = use_signal(|| vec![SheetTabState::default()]);
     let active_tab = use_signal(|| 0usize);
+    let show_meta_row = use_signal(|| false);
+    let mut save_success = use_signal(|| false);
 
     use_effect({
         let mut data = data;
@@ -98,7 +101,51 @@ pub fn App() -> Element {
 
     rsx! {
         document::Style { "{STYLESHEET}" }
-        div { class: "app",
+        div {
+            class: "app",
+            tabindex: "0",
+            onkeydown: move |evt: Event<KeyboardData>| {
+                if evt.modifiers().ctrl() || evt.modifiers().meta() {
+                    match evt.key() {
+                        Key::Character(ref c) if c == "s" || c == "S" => {
+                            evt.prevent_default();
+                            let success = actions::save_file(data, file_path, error_message);
+                            if success {
+                                save_success.set(true);
+                                spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    save_success.set(false);
+                                });
+                            }
+                        }
+                        Key::Character(ref c) if c == "z" || c == "Z" => {
+                            evt.prevent_default();
+                            let undone = data.with_mut(|state| state.undo());
+                            if undone {
+                                selected_row.set(None);
+                                selected_column.set(None);
+                                error_message.set(None);
+                            }
+                        }
+                        Key::Character(ref c) if c == "y" || c == "Y" => {
+                            evt.prevent_default();
+                            let redone = data.with_mut(|state| state.redo());
+                            if redone {
+                                selected_row.set(None);
+                                selected_column.set(None);
+                                error_message.set(None);
+                            }
+                        }
+                        Key::Character(ref c) if c == "o" || c == "O" => {
+                            evt.prevent_default();
+                            spawn(async move {
+                                actions::open_file(data, language, file_path, error_message, selected_row, selected_column).await;
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            },
             div { class: "tab-bar", id: "tab-bar",
                 for (index, tab) in tabs_snapshot.iter().enumerate() {
                     div { class: if index == active_index { "tab-item active" } else { "tab-item" },
@@ -245,8 +292,8 @@ pub fn App() -> Element {
                     "+"
                 }
             }
-            Toolbar { data, language, file_path, error_message, selected_row, selected_column }
-            Table { data, language, file_path, error_message, selected_row, selected_column }
+            Toolbar { data, language, file_path, error_message, selected_row, selected_column, show_meta_row, save_success }
+            Table { data, language, file_path, error_message, selected_row, selected_column, show_meta_row }
         }
     }
 }
