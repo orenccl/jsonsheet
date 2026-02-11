@@ -547,3 +547,21 @@ fn test_apply_cell_edits_respects_validation_rules() {
     assert_eq!(changed, 0);
     assert_eq!(state.data()[0]["name"], Value::String("Alice".to_string()));
 }
+
+#[test]
+fn test_formula_supports_bracket_identifiers_for_non_ascii_columns() {
+    let mut state = TableState::from_data(vec![BTreeMap::from([
+        ("總分".to_string(), Value::Number(40.into())),
+        ("加成 值".to_string(), Value::Number(2.into())),
+    ])]);
+    assert!(state.add_column("結果"));
+    assert!(state.set_cell_formula(0, "結果", "=[總分] + [加成 值]".to_string()));
+    assert_eq!(state.cell_display_value(0, "結果"), "42");
+}
+
+#[test]
+fn test_formula_rejects_unterminated_bracket_identifier() {
+    let mut state = sample_state();
+    assert!(state.add_column("score"));
+    assert!(!state.set_cell_formula(0, "score", "=[age + 1".to_string()));
+}

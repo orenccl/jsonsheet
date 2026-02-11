@@ -949,6 +949,11 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
+            if ch == '[' {
+                tokens.push(Token::Ident(self.consume_bracket_ident()?));
+                continue;
+            }
+
             if ch.is_ascii_alphabetic() || ch == '_' {
                 tokens.push(Token::Ident(self.consume_ident()));
                 continue;
@@ -1021,6 +1026,33 @@ impl<'a> Lexer<'a> {
             }
         }
         out
+    }
+
+    fn consume_bracket_ident(&mut self) -> Result<String, String> {
+        let mut out = String::new();
+        let mut escaped = false;
+        self.chars.next(); // opening '['
+
+        for ch in self.chars.by_ref() {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == ']' {
+                if out.trim().is_empty() {
+                    return Err("Bracket identifier cannot be empty".to_string());
+                }
+                return Ok(out);
+            }
+            out.push(ch);
+        }
+
+        Err("Unterminated bracket identifier".to_string())
     }
 }
 

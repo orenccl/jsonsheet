@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use jsonsheet::state::table_state::{SortOrder, TableState};
+use jsonsheet::state::table_state::{SortOrder, TableState, UNDO_HISTORY_LIMIT};
 
 fn sample_state() -> TableState {
     TableState::from_data(vec![
@@ -141,4 +141,20 @@ fn test_delete_filtered_column_clears_filter_state() {
     assert_eq!(state.filter_column(), None);
     assert_eq!(state.filter_query(), "");
     assert_eq!(state.visible_row_indices(), vec![0, 1, 2]);
+}
+
+#[test]
+fn test_undo_history_is_capped() {
+    let mut state = sample_state();
+
+    for i in 0..(UNDO_HISTORY_LIMIT + 25) {
+        assert!(state.set_cell_value(0, "age", Value::Number((1000 + i as u64).into()),));
+    }
+
+    let mut undo_count = 0usize;
+    while state.undo() {
+        undo_count += 1;
+    }
+
+    assert_eq!(undo_count, UNDO_HISTORY_LIMIT);
 }

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::io::atomic_write_string;
 use crate::io::json_io::{self, JsonIoError, Row};
 use crate::state::jsheet::{
     ColumnConstraint, ColumnStyle, ConditionalFormat, JSheetMeta, SummaryKind, ValidationRule,
@@ -250,6 +251,6 @@ pub fn save_sidecar_for_json(
     let path = sidecar_path_for_json(json_path);
     let file = JSheetFile::from_meta(meta, data);
     let content = serde_json::to_string_pretty(&file)?;
-    fs::write(path, content)?;
+    atomic_write_string(&path, &content)?;
     Ok(())
 }

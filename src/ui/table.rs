@@ -324,7 +324,7 @@ pub fn Table(
                 }
                 tbody {
                     for (display_index, data_index) in visible_rows.iter().enumerate() {
-                        if let Some(row) = snapshot.row_with_computed(*data_index) {
+                        if let Some(row) = snapshot.row_with_computed_for_columns(*data_index, &columns) {
                             TableRow {
                                 display_index,
                                 data_index: *data_index,
@@ -349,7 +349,7 @@ pub fn Table(
                                 autofill_target,
                                 search_query: search_query.clone(),
                                 frozen_count,
-                                visible_row_count: visible_rows.len(),
+                                visible_rows: visible_rows.clone(),
                             }
                         }
                     }
@@ -999,7 +999,7 @@ fn TableRow(
     autofill_target: Signal<Option<CellPoint>>,
     search_query: String,
     frozen_count: usize,
-    visible_row_count: usize,
+    visible_rows: Vec<usize>,
 ) -> Element {
     let snapshot = data.read().clone();
     let formula_columns: BTreeSet<String> = columns
@@ -1064,15 +1064,16 @@ fn TableRow(
                             },
                             onkeydown: {
                                 let columns = columns.clone();
-                                let visible_rows_count = visible_row_count;
+                                let visible_rows = visible_rows.clone();
                                 move |evt: Event<KeyboardData>| {
+                                    let visible_rows_count = visible_rows.len();
                                     match evt.key() {
                                         Key::Enter => {
                                             commit_edit(data, language, file_path, error_message, editing);
                                             // Move down
                                             move_selection(
                                                 selected_range, selected_row, selected_column,
-                                                1, 0, visible_rows_count, columns.len(), &columns, &[],
+                                                1, 0, visible_rows_count, columns.len(), &columns, &visible_rows,
                                             );
                                         }
                                         Key::Tab => {
@@ -1081,7 +1082,7 @@ fn TableRow(
                                             let dc: isize = if evt.modifiers().shift() { -1 } else { 1 };
                                             move_selection(
                                                 selected_range, selected_row, selected_column,
-                                                0, dc, visible_rows_count, columns.len(), &columns, &[],
+                                                0, dc, visible_rows_count, columns.len(), &columns, &visible_rows,
                                             );
                                         }
                                         Key::Escape => editing.set(None),
@@ -2003,8 +2004,46 @@ fn format_validation_number(n: f64) -> String {
 }
 
 fn sanitize_id(value: &str) -> String {
-    value
+    let mut base: String = value
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
+        .collect();
+
+    if base.is_empty() {
+        base.push('_');
+    }
+
+    if value.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return base;
+    }
+
+    format!("{base}-{:016x}", stable_fnv1a_64(value.as_bytes()))
+}
+
+fn stable_fnv1a_64(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_id;
+
+    #[test]
+    fn sanitize_id_is_stable_and_collision_resistant_for_common_cases() {
+        assert_eq!(sanitize_id("age"), "age");
+        let first = sanitize_id("a.b");
+        let second = sanitize_id("a-b");
+        assert_ne!(first, second);
+        assert_eq!(first, sanitize_id("a.b"));
+        assert!(first.starts_with("a_b-"));
+        assert!(second.starts_with("a_b-"));
+    }
 }
