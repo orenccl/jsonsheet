@@ -5,6 +5,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::io::atomic_write_string;
+
 pub type Row = BTreeMap<String, Value>;
 
 #[derive(Debug)]
@@ -74,6 +76,6 @@ pub fn save_json(path: &Path, data: &[Row]) -> Result<(), JsonIoError> {
         .collect();
 
     let json = serde_json::to_string_pretty(&array)?;
-    fs::write(path, json)?;
+    atomic_write_string(path, &json)?;
     Ok(())
 }

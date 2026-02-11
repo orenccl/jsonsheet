@@ -7,6 +7,8 @@ use crate::state::jsheet::{
     ColumnStyle, ColumnType, ConditionalFormat, JSheetMeta, SummaryKind, ValidationRule,
 };
 
+pub const UNDO_HISTORY_LIMIT: usize = 100;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SortOrder {
     Asc,
@@ -273,11 +275,20 @@ impl TableState {
     }
 
     pub fn row_with_computed(&self, row_index: usize) -> Option<Row> {
+        let columns = self.display_columns();
+        self.row_with_computed_for_columns(row_index, &columns)
+    }
+
+    pub fn row_with_computed_for_columns(
+        &self,
+        row_index: usize,
+        columns: &[String],
+    ) -> Option<Row> {
         let base = self.data.get(row_index)?;
         let mut row = base.clone();
-        for column in self.display_columns() {
-            if let Some(value) = self.jsheet_meta.value_for_cell(base, row_index, &column) {
-                row.insert(column, value);
+        for column in columns {
+            if let Some(value) = self.jsheet_meta.value_for_cell(base, row_index, column) {
+                row.insert(column.clone(), value);
             }
         }
         Some(row)
@@ -588,6 +599,9 @@ impl TableState {
 
     fn push_undo_snapshot(&mut self) {
         self.undo_stack.push(self.snapshot());
+        if self.undo_stack.len() > UNDO_HISTORY_LIMIT {
+            self.undo_stack.remove(0);
+        }
         self.redo_stack.clear();
     }
 

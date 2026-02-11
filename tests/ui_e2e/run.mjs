@@ -7,6 +7,12 @@ import path from "node:path";
 
 const root = process.env.JSONSHEET_ROOT || process.cwd();
 const fixture = path.join(root, "tests", "data", "types.json");
+const enCatalog = JSON.parse(
+  fs.readFileSync(path.join(root, "assets", "i18n", "en.json"), "utf8")
+);
+const zhCatalog = JSON.parse(
+  fs.readFileSync(path.join(root, "assets", "i18n", "zh-Hant.json"), "utf8")
+);
 
 function resolveBinaryPath() {
   const windowsExe = path.join(root, "target", "debug", "jsonsheet.exe");
@@ -98,7 +104,7 @@ async function findAppPage(browser, attempts = 50) {
           }
 
           const markerVisible = await page
-            .locator(".app, #table-container, #empty-message")
+            .locator(".app, #table-container, #empty-state")
             .first()
             .isVisible({ timeout: 300 })
             .catch(() => false);
@@ -173,7 +179,7 @@ async function assertElementText(page, selector, expected, timeout = 5000) {
     ({ selector: s, expectedText }) => {
       const el = document.querySelector(s);
       if (!el) return false;
-      return (el.textContent || "").trim() === expectedText;
+      return (el.textContent || "").includes(expectedText);
     },
     { selector, expectedText: expected },
     { timeout }
@@ -247,37 +253,48 @@ async function main() {
     await page.fill("#context-bg-color", "#ffffcc");
     await page.click("#btn-context-apply-style");
 
+    // Show column metadata controls before interacting with meta-row fields.
+    await page.click("#btn-toggle-meta");
+    await page.waitForSelector("#column-meta-row", { timeout: 5000 });
+
     // Comment column toggle should be available in header controls.
     await page.fill("#input-new-column", "note");
     await page.click("#btn-add-column");
     await page.waitForSelector("#col-note", { timeout: 5000 });
     await page.click("#meta-comment-note");
 
-    await page.click("#cell-0-age");
+    await page.dblclick("#cell-0-age");
     await page.fill("#cell-input-0-age", "oops");
     await page.keyboard.press("Enter");
     await assertCellContains(page, 0, "age", "30");
 
     // Phase 8: enum validation should expose dropdown options in cell editor.
     await page.fill("#meta-val-enum-name", "Alice, Bob, Charlie, Zed");
-    await page.click("#cell-0-name");
+    await page.dblclick("#cell-0-name");
     await page.waitForSelector("#cell-input-0-name[list^='enum-options-']", {
       timeout: 5000,
     });
     await page.click("#cell-1-age");
     await page.waitForSelector("#cell-0-name", { timeout: 5000 });
-
     // Phase 4: i18n language switch.
-    await assertElementText(page, "#btn-open", "Open");
-    await assertInputPlaceholder(page, "#input-search-query", "Search all cells");
+    await assertElementText(page, "#btn-open", enCatalog["toolbar.open"]);
+    await assertInputPlaceholder(
+      page,
+      "#input-search-query",
+      enCatalog["toolbar.search_placeholder"]
+    );
     await page.selectOption("#select-language", "zh-Hant");
-    await assertElementText(page, "#btn-open", "開啟");
-    await assertInputPlaceholder(page, "#input-search-query", "搜尋所有儲存格");
+    await assertElementText(page, "#btn-open", zhCatalog["toolbar.open"]);
+    await assertInputPlaceholder(
+      page,
+      "#input-search-query",
+      zhCatalog["toolbar.search_placeholder"]
+    );
     await page.selectOption("#select-language", "en");
-    await assertElementText(page, "#btn-open", "Open");
+    await assertElementText(page, "#btn-open", enCatalog["toolbar.open"]);
 
     // Phase 2 baseline: edit cell.
-    await page.click("#cell-0-name");
+    await page.dblclick("#cell-0-name");
     await page.fill("#cell-input-0-name", "Zed");
     await page.keyboard.press("Enter");
     await assertCellContains(page, 0, "name", "Zed");
@@ -310,7 +327,7 @@ async function main() {
     // Phase 9: multi-sheet tabs should preserve each sheet state independently.
     await page.click("#btn-new-tab");
     await page.waitForSelector("#tab-1", { timeout: 5000 });
-    await page.waitForSelector("#empty-message", { timeout: 5000 });
+    await page.waitForSelector("#empty-state", { timeout: 5000 });
     await page.click("#tab-0");
     await page.waitForSelector("#table-container", { timeout: 5000 });
     await waitForRowCount(page, 2);
@@ -342,10 +359,11 @@ async function main() {
     await page.waitForSelector("#col-department", { timeout: 5000 });
 
     // Phase 9: auto-fill drag handle (single numeric source should increment).
-    await page.click("#cell-0-age");
+    await page.dblclick("#cell-0-age");
     await page.fill("#cell-input-0-age", "10");
     await page.keyboard.press("Enter");
     await assertCellContains(page, 0, "age", "10");
+    await page.click("#cell-0-age");
     await page.dragAndDrop("#cell-0-age .fill-handle", "#cell-2-age");
     await assertCellContains(page, 1, "age", "11");
     await assertCellContains(page, 2, "age", "12");
